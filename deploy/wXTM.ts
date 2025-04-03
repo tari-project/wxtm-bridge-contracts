@@ -1,6 +1,7 @@
 import assert from 'assert'
 
 import { type DeployFunction } from 'hardhat-deploy/types'
+import { ethers } from 'hardhat'
 
 const contractName = 'wXTM'
 
@@ -31,7 +32,9 @@ const deploy: DeployFunction = async (hre) => {
     //     eid: EndpointId.AVALANCHE_V2_TESTNET
     //   }
     // }
+
     const endpointV2Deployment = await hre.deployments.get('EndpointV2')
+    const salt = ethers.utils.id('wXTM-deployment')
 
     const { address } = await deploy(contractName, {
         from: deployer,
@@ -41,6 +44,7 @@ const deploy: DeployFunction = async (hre) => {
             endpointV2Deployment.address, // LayerZero's EndpointV2 address
             deployer, // owner
         ],
+        deterministicDeployment: salt,
         log: true,
         skipIfAlreadyDeployed: false,
     })
