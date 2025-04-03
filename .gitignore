@@ -4,6 +4,8 @@ coverage
 coverage.json
 typechain
 typechain-types
+TODO.md
+deployments
 
 # Hardhat files
 cache

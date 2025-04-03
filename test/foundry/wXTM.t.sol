@@ -19,6 +19,7 @@ import { OFTComposeMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTCom
 
 // OZ imports
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 // Forge imports
 import "forge-std/console.sol";
@@ -64,6 +65,15 @@ contract wXTMTest is TestHelperOz5 {
 
         // mint tokens
         aOFT.mint(userA, initialBalance);
+        bOFT.mint(userB, initialBalance);
+    }
+
+    function test_unauthorized_cannot_mint() public {
+        vm.startPrank(address(666));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(666)));
+        aOFT.mint(userA, initialBalance);
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(666)));
         bOFT.mint(userB, initialBalance);
     }
 
@@ -164,6 +174,4 @@ contract wXTMTest is TestHelperOz5 {
         assertEq(composer.executor(), address(this));
         assertEq(composer.extraData(), composerMsg_); // default to setting the extraData to the message as well to test
     }
-
-    // TODO import the rest of oft tests?
 }
