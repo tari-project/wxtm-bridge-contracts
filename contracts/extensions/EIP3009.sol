@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.22;
+
+import { EIP712 } from "./EIP712.sol";
+import { EIP712Domain } from "./EIP712Domain.sol";
+
+abstract contract EIP3009 is EIP712Domain {
+    error EIP3009_AuthorizationNotYetValid();
+    error EIP3009_AuthorizationExpired();
+    error EIP3009_AuthorizationUsed();
+    error EIP3009_InvalidSignature();
+    error EIP3009_UnauthorizedCaller();
+
+    /** @dev BELOW VALUE TO BE UPDATED !!! */
+    // keccak256("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)")
+    bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH =
+        0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267;
+
+    /** @dev BELOW VALUE TO BE UPDATED !!! */
+    // keccak256("ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)")
+    bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
+        0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
+
+    mapping(address => mapping(bytes32 => bool)) internal _authorizationStates;
+
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+
+    constructor(string memory name, string memory version) EIP712Domain(name, version) {}
+
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
+        return _authorizationStates[authorizer][nonce];
+    }
+
+    /**
+     * @notice Burns wXTM tokens after verification
+     * @dev EOA wallet signatures should be packed in the order of r, s, v.
+     * @param from          Address authorizing the burn (must hold sufficient balance)
+     * @param to            Address that receive original tokens on the Tari blockchain
+     * @param value         Amount of wXTM tokens to burn
+     * @param validAfter    Timestamp after which the authorization is valid
+     * @param validBefore   Timestamp (unix time) before which the authorization expires
+     * @param nonce         Unique identifier to prevent replay attacks
+     * @param v             Signature component.
+     * @param r             Signature component.
+     * @param s             Signature component.
+     */
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
+        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
+        if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
+        /** @dev Prevent front-running: only 'to' address can execute this */
+        if (msg.sender != from) revert EIP3009_UnauthorizedCaller();
+
+        /** @dev Prevent reentrancy attack */
+        _authorizationStates[from][nonce] = true;
+
+        /** @dev Check signature */
+        bytes memory data = abi.encode(
+            TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
+            from,
+            to,
+            value,
+            validAfter,
+            validBefore,
+            nonce
+        );
+
+        if (EIP712.recover(DOMAIN_SEPARATOR, v, r, s, data) != from) revert EIP3009_InvalidSignature();
+
+        emit AuthorizationUsed(from, nonce);
+
+        _burnTokens(from, value);
+    }
+
+    /**
+     * @notice Mints wXTM tokens after verification
+     * @dev This has an additional check to ensure that the payee's address
+     * matches the caller of this function to prevent front-running attacks.
+     * EOA wallet signatures should be packed in the order of r, s, v.
+     * @param from          Address authorizing the mint (original token owner on Tari blockchain)
+     * @param to            Address receiving the minted tokens
+     * @param value         Amount of wXTM tokens to mint
+     * @param validAfter    Timestamp after which the authorization is valid
+     * @param validBefore   Timestamp (unix time) before which the authorization expires
+     * @param nonce         Unique identifier to prevent replay attacks
+     * @param v             Signature component.
+     * @param r             Signature component.
+     * @param s             Signature component.
+     */
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
+        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
+        if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
+        /** @dev Prevent front-running: only 'to' address can execute this */
+        if (msg.sender != to) revert EIP3009_UnauthorizedCaller();
+
+        /** @dev Prevent reentrancy attack */
+        _authorizationStates[from][nonce] = true;
+
+        /** @dev Check signature */
+        bytes memory data = abi.encode(
+            RECEIVE_WITH_AUTHORIZATION_TYPEHASH,
+            from,
+            to,
+            value,
+            validAfter,
+            validBefore,
+            nonce
+        );
+
+        if (EIP712.recover(DOMAIN_SEPARATOR, v, r, s, data) != to) revert EIP3009_InvalidSignature();
+
+        emit AuthorizationUsed(from, nonce);
+
+        _mintTokens(to, value);
+    }
+
+    function _burnTokens(address from, uint256 amount) internal virtual;
+
+    function _mintTokens(address to, uint256 amount) internal virtual;
+}
