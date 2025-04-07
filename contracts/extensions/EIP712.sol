@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.22;
 
+import { ECRecover } from "./ECRecover.sol";
+
 library EIP712 {
     error EIP712_InvalidSignature();
 
-    /** @dev BELOW VALUE TO BE UPDATED !!! */
     // keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
-    bytes32 public constant EIP712_DOMAIN_TYPEHASH = 0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b178b0ffacaa9a75d522b39666f;
+    bytes32 public constant EIP712_DOMAIN_TYPEHASH = 0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f;
 
     /**
      * @notice Make EIP712 domain separator
      * @param name      Contract name
      * @param version   Contract version
-     * @return Domain   Separator
+     * @return Domain separator
      */
     function makeDomainSeparator(string memory name, string memory version) internal view returns (bytes32) {
         uint256 chainId;
@@ -27,12 +28,21 @@ library EIP712 {
                     EIP712_DOMAIN_TYPEHASH,
                     keccak256(bytes(name)),
                     keccak256(bytes(version)),
-                    bytes32(chainId),
-                    address(this)
+                    address(this),
+                    bytes32(chainId)
                 )
             );
     }
 
+    /**
+     * @notice Recover signer's address from a EIP712 signature
+     * @param domainSeparator   Domain separator
+     * @param v                 v of the signature
+     * @param r                 r of the signature
+     * @param s                 s of the signature
+     * @param typeHashAndData   Type hash concatenated with data
+     * @return Signer's address
+     */
     function recover(
         bytes32 domainSeparator,
         uint8 v,
@@ -40,12 +50,8 @@ library EIP712 {
         bytes32 s,
         bytes memory typeHashAndData
     ) internal pure returns (address) {
-        bytes32 structHash = keccak256(typeHashAndData);
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        address recovered = ecrecover(digest, v, r, s);
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, keccak256(typeHashAndData)));
 
-        if (recovered == address(0)) revert EIP712_InvalidSignature();
-
-        return recovered;
+        return ECRecover.recover(digest, v, r, s);
     }
 }
