@@ -2,19 +2,23 @@
 pragma solidity ^0.8.22;
 
 import { EIP3009 } from "./extensions/EIP3009.sol";
-import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+/** @dev Ownable from openzeppelin conflict -> to be resolved */
+// import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
-contract wXTMBridge is EIP3009, Ownable {
+contract wXTMBridge is EIP3009 {
+    error wXTMBridge_NotOwner();
+
+    address public owner;
     address private wXTM;
 
     event TokensMinted(address indexed to, uint256 indexed amount, bytes32 indexed authorizationId);
     event TokensBurned(address indexed from, uint256 indexed amount, bytes32 indexed authorizationId);
 
-    constructor(address _wXTM) Ownable(msg.sender) {
+    constructor(address _wXTM, address _delegate) {
         wXTM = _wXTM;
+        owner = _delegate;
     }
 
     /** @dev Function to handle wXTM upgradable concept */
@@ -22,15 +26,45 @@ contract wXTMBridge is EIP3009, Ownable {
         wXTM = wXTMAddress;
     }
 
-    function _mintTokens(address to, uint256 amount) internal override {
-        IwXTM(wXTM).mint(to, amount);
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external onlyOwner {
+        _receiveWithAuthorization(from, to, value, validAfter, validBefore, nonce, v, r, s);
 
-        emit TokensMinted(to, amount, keccak256(abi.encode(to, amount, block.timestamp)));
+        IwXTM(wXTM).mint(to, value);
+
+        emit TokensMinted(to, value, keccak256(abi.encode(to, value, block.timestamp)));
     }
 
-    function _burnTokens(address from, uint256 amount) internal override {
-        IwXTM(wXTM).burn(from, amount);
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external onlyOwner {
+        _transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, v, r, s);
 
-        emit TokensBurned(from, amount, keccak256(abi.encode(from, amount, block.timestamp)));
+        IwXTM(wXTM).burn(from, value);
+
+        emit TokensBurned(from, value, keccak256(abi.encode(from, value, block.timestamp)));
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert wXTMBridge_NotOwner();
+
+        _;
     }
 }
