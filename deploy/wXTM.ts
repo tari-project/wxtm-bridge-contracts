@@ -40,7 +40,7 @@ const deploy: DeployFunction = async (hre) => {
         from: deployer,
         args: [
             'WrappedXTM', // name
-            'WXTM', // symbol
+            'wXTM', // symbol
             endpointV2Deployment.address, // LayerZero's EndpointV2 address
             deployer, // owner
         ],
