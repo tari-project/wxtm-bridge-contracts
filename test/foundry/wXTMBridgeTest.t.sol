@@ -7,6 +7,7 @@ import { wXTMBridge } from "../../contracts/wXTMBridge.sol";
 // DevTools imports
 import { console } from "forge-std/Test.sol";
 import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contracts/TestHelperOz5.sol";
+import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract wXTMBridgeTest is TestHelperOz5 {
     event DomainXX(bytes32);
@@ -35,13 +36,14 @@ contract wXTMBridgeTest is TestHelperOz5 {
         setUpEndpoints(2, LibraryType.UltraLightNode);
 
         wxtm = wXTM(
-            _deployOApp(type(wXTM).creationCode, abi.encode("WrappedXTM", "WXTM", address(endpoints[aEid]), multiSig))
+            _deployContractAndProxy(
+                type(wXTM).creationCode,
+                abi.encode(address(endpoints[aEid])),
+                abi.encodeWithSelector(wXTM.initialize.selector, "WrappedXTM", "WXTM", multiSig)
+            )
         );
 
         bridge = new wXTMBridge(address(wxtm), multiSig);
-
-        vm.prank(multiSig);
-        wxtm.transferOwnership(address(bridge));
 
         // config and wire the ofts
         address[] memory ofts = new address[](1);
@@ -49,10 +51,8 @@ contract wXTMBridgeTest is TestHelperOz5 {
         this.wireOApps(ofts);
 
         /** @dev Add some tokens for tari and multiSig */
-        vm.startPrank(address(bridge));
+        vm.prank(multiSig);
         wxtm.mint(multiSig, 10 ether);
-        wxtm.mint(tari, 10 ether);
-        vm.stopPrank();
     }
 
     // To be fixed
@@ -64,45 +64,21 @@ contract wXTMBridgeTest is TestHelperOz5 {
 
         // Build digest and sign it
         bytes32 digest = getDigest(
-            bridge.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(),
-            tari,
+            wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(),
             multiSig,
+            address(bridge),
             value,
             validAfter,
             validBefore,
             nonce
         );
 
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(tariKey, digest);
-
-        vm.prank(multiSig);
-        bridge.receiveWithAuthorization(tari, multiSig, value, validAfter, validBefore, nonce, v, r, s);
-
-        assertEq(wxtm.balanceOf(multiSig), value);
-    }
-
-    // To be fixed
-    function test_transfer_with_authorization() public {
-        uint256 value = 6 ether;
-        uint256 validAfter = block.timestamp;
-        uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = keccak256("burn-1");
-
-        bytes32 digest = getDigest(
-            bridge.TRANSFER_WITH_AUTHORIZATION_TYPEHASH(),
-            multiSig,
-            tari,
-            value,
-            validAfter,
-            validBefore,
-            nonce
-        );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(multiSigKey, digest);
 
-        vm.prank(multiSig);
-        bridge.transferWithAuthorization(multiSig, tari, value, validAfter, validBefore, nonce, v, r, s);
+        vm.prank(address(bridge));
+        bridge.bridgeToTariWithAuthorization("tariWalletAddress", value, validAfter, validBefore, nonce, v, r, s);
 
-        assertEq(wxtm.balanceOf(multiSig), 4 ether);
+        assertEq(wxtm.balanceOf(multiSig), 0 ether);
     }
 
     function getDigest(
@@ -119,5 +95,22 @@ contract wXTMBridgeTest is TestHelperOz5 {
         bytes32 domainSeparator = 0xb7ae7eb7a2f74a0c8b77c75a7320918c1e27d40c1aa2a9eabb90dcfa54fc1e94;
 
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+    }
+
+    function _deployContractAndProxy(
+        bytes memory _oappBytecode,
+        bytes memory _constructorArgs,
+        bytes memory _initializeArgs
+    ) internal returns (address addr) {
+        bytes memory bytecode = bytes.concat(abi.encodePacked(_oappBytecode), _constructorArgs);
+        assembly {
+            addr := create(0, add(bytecode, 0x20), mload(bytecode))
+            if iszero(extcodesize(addr)) {
+                revert(0, 0)
+            }
+        }
+
+        // proxyAdmin = multiSig
+        return address(new TransparentUpgradeableProxy(addr, multiSig, _initializeArgs));
     }
 }
