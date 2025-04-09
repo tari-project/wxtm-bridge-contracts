@@ -1,7 +1,10 @@
 import assert from 'assert'
+import verify from '../utils/verify'
 
 import { type DeployFunction } from 'hardhat-deploy/types'
-import { ethers } from 'hardhat'
+import { ethers, upgrades } from 'hardhat'
+import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
+import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
 const contractName = 'wXTM'
 
@@ -33,23 +36,42 @@ const deploy: DeployFunction = async (hre) => {
     //   }
     // }
 
-    const endpointV2Deployment = await hre.deployments.get('EndpointV2')
+    const eid = hre.network.config.eid as EndpointId
+    const lzNetworkName = endpointIdToNetwork(eid)
+
+    const { address } = getDeploymentAddressAndAbi(lzNetworkName, 'EndpointV2')
+
     const salt = ethers.utils.id('wXTM-deployment')
 
-    const { address } = await deploy(contractName, {
+    const proxy = await deploy(contractName, {
         from: deployer,
-        args: [
-            'WrappedXTM', // name
-            'wXTM', // symbol
-            endpointV2Deployment.address, // LayerZero's EndpointV2 address
-            deployer, // owner
-        ],
+        args: [address],
         deterministicDeployment: salt,
         log: true,
+        waitConfirmations: 1,
         skipIfAlreadyDeployed: false,
+        proxy: {
+            proxyContract: 'OpenZeppelinTransparentProxy',
+            owner: deployer,
+            execute: {
+                init: {
+                    methodName: 'initialize',
+                    args: ['WrappedXTM', 'wXTM', deployer], // initializer args
+                },
+            },
+        },
     })
 
-    console.log(`Deployed contract: ${contractName}, network: ${hre.network.name}, address: ${address}`)
+    console.log(`Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}`)
+
+    /** @dev To be fixed as `getImplementationAddress` does not recognize deployment as proxy */
+    // // Retrieve the implementation address
+    // const currentImplAddress = await upgrades.erc1967.getImplementationAddress(proxy.address)
+
+    // console.log(`Implementation address: ${currentImplAddress} network: ${hre.network.name}`)
+
+    // // Verify
+    // await verify(currentImplAddress, [address])
 }
 
 deploy.tags = [contractName]
