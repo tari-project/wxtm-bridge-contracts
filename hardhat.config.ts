@@ -9,6 +9,8 @@ import 'hardhat-deploy'
 import 'hardhat-contract-sizer'
 import '@nomiclabs/hardhat-ethers'
 import '@layerzerolabs/toolbox-hardhat'
+import '@openzeppelin/hardhat-upgrades'
+import '@nomiclabs/hardhat-etherscan'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
@@ -21,6 +23,7 @@ const MNEMONIC = process.env.MNEMONIC
 
 // If you prefer to be authenticated using a private key, set a PRIVATE_KEY environment variable
 const PRIVATE_KEY = process.env.PRIVATE_KEY
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY
 
 const accounts: HttpNetworkAccountsUserConfig | undefined = MNEMONIC
     ? { mnemonic: MNEMONIC }
@@ -81,6 +84,9 @@ const config: HardhatUserConfig = {
             // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
             allowUnlimitedContractSize: true,
         },
+    },
+    etherscan: {
+        apiKey: ETHERSCAN_API_KEY,
     },
     namedAccounts: {
         deployer: {
