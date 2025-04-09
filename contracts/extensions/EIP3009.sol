@@ -1,32 +1,41 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.22;
 
-import { EIP712 } from "./EIP712.sol";
-import { EIP712Domain } from "./EIP712Domain.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-abstract contract EIP3009 is EIP712Domain {
+abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
     error EIP3009_AuthorizationNotYetValid();
     error EIP3009_AuthorizationExpired();
     error EIP3009_AuthorizationUsed();
     error EIP3009_InvalidSignature();
     error EIP3009_UnauthorizedCaller();
 
-    /** @dev BELOW VALUE TO BE UPDATED !!! */
     // keccak256("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)")
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH =
         0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267;
 
-    /** @dev BELOW VALUE TO BE UPDATED !!! */
     // keccak256("ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)")
     bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
         0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
 
-    mapping(address => mapping(bytes32 => bool)) internal _authorizationStates;
+    // keccak256("CancelAuthorization(address authorizer,bytes32 nonce)")
+    bytes32 public constant CANCEL_AUTHORIZATION_TYPEHASH =
+        0x158b0a9edf7a828aad02f63cd515c68ef2f50ba807396f6d12842833a1597429;
+
+    mapping(address => mapping(bytes32 => bool)) private _authorizationStates;
 
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce);
 
-    constructor(string memory name, string memory version) EIP712Domain(name, version) {}
-
+    /**
+     * @notice Returns the state of an authorization
+     * @dev Nonces are randomly generated 32-byte data unique to the authorizer's address
+     * @param authorizer    Authorizer's address
+     * @param nonce         Nonce of the authorization
+     * @return True if the nonce is used
+     */
     function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
         return _authorizationStates[authorizer][nonce];
     }
@@ -44,7 +53,7 @@ abstract contract EIP3009 is EIP712Domain {
      * @param r             Signature component.
      * @param s             Signature component.
      */
-    function transferWithAuthorization(
+    function _transferWithAuthorization(
         address from,
         address to,
         uint256 value,
@@ -54,32 +63,19 @@ abstract contract EIP3009 is EIP712Domain {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
-        if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
-        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
-        if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
-        /** @dev Prevent front-running: only 'to' address can execute this */
-        if (msg.sender != from) revert EIP3009_UnauthorizedCaller();
-
-        /** @dev Prevent reentrancy attack */
-        _authorizationStates[from][nonce] = true;
-
-        /** @dev Check signature */
-        bytes memory data = abi.encode(
+    ) internal {
+        _transferWithAuthorization(
             TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
             from,
             to,
             value,
             validAfter,
             validBefore,
-            nonce
+            nonce,
+            v,
+            r,
+            s
         );
-
-        if (EIP712.recover(DOMAIN_SEPARATOR, v, r, s, data) != from) revert EIP3009_InvalidSignature();
-
-        emit AuthorizationUsed(from, nonce);
-
-        _burnTokens(from, value);
     }
 
     /**
@@ -97,7 +93,7 @@ abstract contract EIP3009 is EIP712Domain {
      * @param r             Signature component.
      * @param s             Signature component.
      */
-    function receiveWithAuthorization(
+    function _receiveWithAuthorization(
         address from,
         address to,
         uint256 value,
@@ -107,35 +103,81 @@ abstract contract EIP3009 is EIP712Domain {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
-        if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
-        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
-        if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
+    ) internal {
         /** @dev Prevent front-running: only 'to' address can execute this */
         if (msg.sender != to) revert EIP3009_UnauthorizedCaller();
 
-        /** @dev Prevent reentrancy attack */
-        _authorizationStates[from][nonce] = true;
-
-        /** @dev Check signature */
-        bytes memory data = abi.encode(
+        _transferWithAuthorization(
             RECEIVE_WITH_AUTHORIZATION_TYPEHASH,
             from,
             to,
             value,
             validAfter,
             validBefore,
-            nonce
+            nonce,
+            v,
+            r,
+            s
+        );
+    }
+
+    /**
+     * @notice Attempt to cancel an authorization
+     * @param authorizer    Authorizer's address
+     * @param nonce         Nonce of the authorization
+     * @param v             v of the signature
+     * @param r             r of the signature
+     * @param s             s of the signature
+     */
+    function _cancelAuthorization(address authorizer, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) internal {
+        if (_authorizationStates[authorizer][nonce]) revert EIP3009_AuthorizationUsed();
+        _requireValidSignature(
+            authorizer,
+            keccak256(abi.encode(CANCEL_AUTHORIZATION_TYPEHASH, authorizer, nonce)),
+            abi.encodePacked(r, s, v)
         );
 
-        if (EIP712.recover(DOMAIN_SEPARATOR, v, r, s, data) != to) revert EIP3009_InvalidSignature();
+        _authorizationStates[authorizer][nonce] = true;
+        emit AuthorizationCanceled(authorizer, nonce);
+    }
+
+    function _transferWithAuthorization(
+        bytes32 typeHash,
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal {
+        if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
+        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
+        if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
+
+        /** @dev Prevent reentrancy attack */
+        _authorizationStates[from][nonce] = true;
+
+        _requireValidSignature(
+            from,
+            keccak256(abi.encode(typeHash, from, to, value, validAfter, validBefore, nonce)),
+            abi.encodePacked(r, s, v)
+        );
 
         emit AuthorizationUsed(from, nonce);
 
-        _mintTokens(to, value);
+        _transfer(from, to, value);
     }
 
-    function _burnTokens(address from, uint256 amount) internal virtual;
-
-    function _mintTokens(address to, uint256 amount) internal virtual;
+    /**
+     * @notice Validates that signature against input data struct
+     * @param signer        Signer's address
+     * @param dataHash      Hash of encoded data struct
+     * @param signature     Signature byte array produced by an EOA wallet or a contract wallet
+     */
+    function _requireValidSignature(address signer, bytes32 dataHash, bytes memory signature) private view {
+        if (signer != ECDSA.recover(_hashTypedDataV4(dataHash), signature)) revert EIP3009_InvalidSignature();
+    }
 }

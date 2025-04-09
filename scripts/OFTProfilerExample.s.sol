@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.22;
 
 /// @title OFTProfilerExtension
 /// @notice Mocks OFT transfer payloads and profiles their gas usage on multiple mainnet networks.
