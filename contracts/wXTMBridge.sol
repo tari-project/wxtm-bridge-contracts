@@ -7,29 +7,24 @@ import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
 contract wXTMBridge is Ownable {
-    address private wXTM;
+    address private immutable wXTM;
 
-    event TokensUnwrapped(
-        address indexed from,
-        string tariAddress,
-        uint256 indexed amount,
-        bytes32 indexed authorizationId
-    );
+    event TokensUnwrapped(address indexed from, string targetTariAddress, uint256 indexed amount);
 
     constructor(address _wXTM, address _delegate) Ownable(_delegate) {
         wXTM = _wXTM;
     }
 
-    function bridgeToTari(string memory tari, uint256 value) external {
+    function bridgeToTari(string memory targetTariAddress, uint256 value) external {
         IERC20(wXTM).transferFrom(msg.sender, address(this), value);
 
         IwXTM(wXTM).burn(address(this), value);
 
-        emit TokensUnwrapped(msg.sender, tari, value, keccak256(abi.encode(address(this), value, block.timestamp)));
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value);
     }
 
     function bridgeToTariWithAuthorization(
-        string memory tari,
+        string memory targetTariAddress,
         uint256 value,
         uint256 validAfter,
         uint256 validBefore,
@@ -42,6 +37,6 @@ contract wXTMBridge is Ownable {
 
         IwXTM(wXTM).burn(address(this), value);
 
-        emit TokensUnwrapped(msg.sender, tari, value, keccak256(abi.encode(msg.sender, value, block.timestamp)));
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value);
     }
 }

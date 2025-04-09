@@ -6,7 +6,9 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
 
 contract wXTM is OFTUpgradeable, EIP3009 {
-    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
+    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _delegate) external initializer {
         __OFT_init(_name, _symbol, _delegate);
@@ -34,5 +36,23 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         bytes32 s
     ) external {
         _receiveWithAuthorization(from, to, value, validAfter, validBefore, nonce, v, r, s);
+    }
+
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        _transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, v, r, s);
+    }
+
+    function cancelAuthorization(address authorizer, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) external {
+        _cancelAuthorization(authorizer, nonce, v, r, s);
     }
 }
