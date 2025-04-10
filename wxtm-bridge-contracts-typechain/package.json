@@ -1,6 +1,6 @@
 {
   "name": "@tari-project/wxtm-bridge-contracts",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Utility pack for wxtm-bridge-contracts",
   "keywords": [
     "wxtmbridge",
@@ -8,7 +8,7 @@
   ],
   "license": "ISC",
   "author": "",
-  "main": "dist/index.js",
+  "main": "index.js",
   "scripts": {
     "prebuild": "npm run copy",
     "build": "npx tsc",

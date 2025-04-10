@@ -7,9 +7,7 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "outDir": "./dist",
-    "rootDir": "./"
+    "declaration": true
   },
-  "include": ["config/**/*", "typechain/**/*", "index.ts", "deployments/**/*"]
+  "include": ["config/**/*", "typechain/**/*", "index.ts", "deployments"]
 }
