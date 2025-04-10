@@ -1,14 +1,14 @@
 {
   "name": "@tari-project/wxtm-bridge-contracts",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Utility pack for wxtm-bridge-contracts",
   "keywords": [
-    "getrewards",
+    "wxtmbridge",
     "smartcontracts"
   ],
   "license": "ISC",
   "author": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
     "prebuild": "npm run copy",
     "build": "npx tsc",
