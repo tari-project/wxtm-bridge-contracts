@@ -7,8 +7,7 @@
         "strict": true,
         "skipLibCheck": true,
         "resolveJsonModule": true,
-        "declaration": true
+        "declaration": true,
     },
-    "include": ["config/**/*", "typechain/**/*", "index.ts"],
-    "exclude": ["node_modules"]
+  "include": ["config/**/*", "typechain/**/*", "index.ts", "deployments"]
 }
