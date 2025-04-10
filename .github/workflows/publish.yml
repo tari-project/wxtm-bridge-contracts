@@ -1,0 +1,54 @@
+name: wXTM bridge contracts package publish
+
+on:
+  push:
+    tags:
+      - '@tari-project/wxtm-bridge-contracts@v*'
+
+env:
+  NODE_VERSION: "18.x"
+  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  DEPLOYER: "0000000000000000000000000000000000000000000000000000000000000000"
+
+jobs:
+  publish:
+    permissions:
+      packages: write
+      contents: read
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v2
+
+      - name: Cache NPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.OS }}-npm-cache-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.OS }}-npm-cache-
+
+      - name: "Setup Node ${{ env.NODE_VERSION }}"
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@tari-project"
+
+      - name: Install npm dependencies
+        run: |
+          npm config set //npm.pkg.github.com/:_authToken ${{ env.NODE_AUTH_TOKEN }}
+          npm config set @tari-project:registry https://npm.pkg.github.com
+          npm install
+
+      - name: "Build contracts"
+        run: npm run compile:hardhat
+
+      - name: "Build package"
+        run: npm run build
+        working-directory: "./wxtm-bridge-contracts-typechain"
+
+      - name: "Publish package"
+        run: npm publish
+        working-directory: "./wxtm-bridge-contracts-typechain"

@@ -9,6 +9,8 @@ import 'hardhat-deploy'
 import 'hardhat-contract-sizer'
 import '@nomiclabs/hardhat-ethers'
 import '@layerzerolabs/toolbox-hardhat'
+import '@typechain/hardhat'
+
 import '@openzeppelin/hardhat-upgrades'
 import '@nomiclabs/hardhat-etherscan'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
@@ -84,6 +86,10 @@ const config: HardhatUserConfig = {
             // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
             allowUnlimitedContractSize: true,
         },
+    },
+    typechain: {
+        outDir: 'typechain',
+        target: 'ethers-v5',
     },
     etherscan: {
         apiKey: ETHERSCAN_API_KEY,

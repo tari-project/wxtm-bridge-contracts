@@ -1,0 +1,19 @@
+export enum CHAIN_NAMES {
+    BASE_SEPOLIA = 'baseSepolia',
+    SEPOLIA = 'sepolia',
+}
+
+export const CHAIN_IDS = {
+    [CHAIN_NAMES.BASE_SEPOLIA]: 84532,
+    [CHAIN_NAMES.SEPOLIA]: 11155111,
+}
+
+export enum KNOWN_NETWORK {
+    BASE_SEPOLIA = CHAIN_NAMES.BASE_SEPOLIA,
+    SEPOLIA = CHAIN_NAMES.SEPOLIA,
+}
+
+export const KNOWN_CHAIN_IDS = {
+    [KNOWN_NETWORK.BASE_SEPOLIA]: 84532,
+    [KNOWN_NETWORK.SEPOLIA]: 11155111,
+} as const

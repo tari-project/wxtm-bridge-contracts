@@ -17,7 +17,9 @@
     "lint:sol": "solhint 'contracts/**/*.sol'",
     "test": "$npm_execpath run test:forge && $npm_execpath run test:hardhat",
     "test:forge": "forge test",
-    "test:hardhat": "hardhat test"
+    "test:hardhat": "hardhat test",
+    "export-deployments-base-sepolia": "npx hardhat --network base-sepolia-testnet run scripts/build/export-deployments.ts",
+    "export-deployments-sepolia": "npx hardhat --network sepolia-testnet run scripts/build/export-deployments.ts"
   },
   "resolutions": {
     "ethers": "^5.7.2",
@@ -49,6 +51,8 @@
     "@openzeppelin/contracts-upgradeable": "^5.0.2",
     "@openzeppelin/hardhat-upgrades": "^1.15.0",
     "@rushstack/eslint-patch": "^1.7.0",
+    "@typechain/ethers-v5": "^11.1.2",
+    "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^4.3.11",
     "@types/mocha": "^10.0.6",
     "@types/node": "~18.18.14",
