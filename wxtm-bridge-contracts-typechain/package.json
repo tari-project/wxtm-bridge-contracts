@@ -1,0 +1,20 @@
+{
+    "name": "@tari-project/wxtm-bridge-contracts",
+    "version": "0.1.0",
+    "description": "Utility pack for wxtm-bridge-contracts",
+    "main": "index.js",
+    "scripts": {
+        "copy": "../scripts/copy.sh",
+        "prebuild": "npm run copy",
+        "build": "npx tsc"
+    },
+    "keywords": [
+        "getrewards",
+        "smartcontracts"
+    ],
+    "author": "",
+    "license": "ISC",
+    "publishConfig": {
+        "registry": "https://npm.pkg.github.com"
+    }
+}
