@@ -3,8 +3,10 @@ import * as fs from 'fs'
 import hre from 'hardhat'
 
 async function exportDeploymentsAddresses(path_directory: string) {
+    //@ts-ignore
     const chainId = await hre.getChainId()
 
+    //@ts-ignore
     const deployments = await hre.deployments.all()
 
     const deploymentsAddresses = Object.keys(deployments).reduce(

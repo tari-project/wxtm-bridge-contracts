@@ -12,7 +12,7 @@ import '@layerzerolabs/toolbox-hardhat'
 import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
-import '@nomiclabs/hardhat-etherscan'
+import '@nomicfoundation/hardhat-verify'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
@@ -93,6 +93,10 @@ const config: HardhatUserConfig = {
     },
     etherscan: {
         apiKey: ETHERSCAN_API_KEY,
+    },
+    sourcify: {
+        // Disabled by default -> Doesn't need an API key
+        enabled: true,
     },
     namedAccounts: {
         deployer: {
