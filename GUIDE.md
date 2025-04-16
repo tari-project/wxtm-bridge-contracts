@@ -1,14 +1,24 @@
 ## Commands Examples
 
-### **Deploy**
+### **Scripts:**
+
+#### **Deploy**
 
 `npx hardhat lz:deploy`
 
-### **Test**
+#### **Verify**
 
-`npm run test:forge`
+`npx hardhat run scripts/verify.ts --network sepolia-testnet`
 
-### **Export Fresh Deployments**
+#### **Ineract With Smartcontract**
+
+`make call ARGS="--network sepolia"`
+
+#### **Tests**
+
+`npm run test:forge` || `forge test`
+
+#### **Export Fresh Deployments**
 
 `npm run export-deployments-sepolia`
 `npm run export-deployments-base-sepolia`
@@ -25,8 +35,5 @@ Base Sepolia: 84532
 
 ### **Deployments**
 
-Sepolia: 0x42aa7A7Eb9871336f634Ed7ED4618d0f039f4f5e
-Base: 0x42aa7A7Eb9871336f634Ed7ED4618d0f039f4f5e
-
-Proxy: 0x4A7cC39b7E7b5F39B6Dc4aCa4098A02F9Ecde3B0
+Proxy (wXTM): 0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374
 Bridge: 0x52610316B50238d0f6259691762179A3d8E87908
