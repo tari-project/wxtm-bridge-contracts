@@ -40,8 +40,9 @@ const deploy: DeployFunction = async (hre) => {
     const lzNetworkName = endpointIdToNetwork(eid)
 
     const { address } = getDeploymentAddressAndAbi(lzNetworkName, 'EndpointV2')
+    console.log('Lz Address: ', address)
 
-    const salt = ethers.utils.id('wXTM-deployment')
+    const salt = ethers.utils.id('wXTM-deployment_v0.0.2')
 
     const proxy = await deploy(contractName, {
         from: deployer,
@@ -64,14 +65,13 @@ const deploy: DeployFunction = async (hre) => {
 
     console.log(`Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}`)
 
-    /** @dev To be fixed as `getImplementationAddress` does not recognize deployment as proxy */
-    // // Retrieve the implementation address
-    // const currentImplAddress = await upgrades.erc1967.getImplementationAddress(proxy.address)
+    // Retrieve the implementation address
+    const currentImplAddress = await upgrades.erc1967.getImplementationAddress(proxy.address)
 
-    // console.log(`Implementation address: ${currentImplAddress} network: ${hre.network.name}`)
+    console.log(`Implementation address: ${currentImplAddress} network: ${hre.network.name}`)
 
-    // // Verify
-    // await verify(currentImplAddress, [address])
+    // Verify
+    await verify(currentImplAddress, [address])
 }
 
 deploy.tags = [contractName]
