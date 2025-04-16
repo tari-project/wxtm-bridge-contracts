@@ -14,6 +14,9 @@ artifacts
 # LayerZero specific files
 .layerzero
 
+# foundry
+*broadcast
+
 # foundry test compilation files
 out
 
