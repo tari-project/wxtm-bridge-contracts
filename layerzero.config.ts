@@ -7,27 +7,27 @@ import type { OmniPointHardhat } from '@layerzerolabs/toolbox-hardhat'
 
 const sepoliaContract: OmniPointHardhat = {
     eid: EndpointId.SEPOLIA_V2_TESTNET,
-    contractName: 'MyOFT',
+    contractName: 'wXTM',
 }
 
 const baseSepoliaContract: OmniPointHardhat = {
     eid: EndpointId.BASESEP_V2_TESTNET,
-    contractName: 'MyOFT',
+    contractName: 'wXTM',
 }
 
 const optimismContract: OmniPointHardhat = {
     eid: EndpointId.OPTSEP_V2_TESTNET,
-    contractName: 'MyOFT',
+    contractName: 'wXTM',
 }
 
 const avalancheContract: OmniPointHardhat = {
     eid: EndpointId.AVALANCHE_V2_TESTNET,
-    contractName: 'MyOFT',
+    contractName: 'wXTM',
 }
 
 const arbitrumContract: OmniPointHardhat = {
     eid: EndpointId.ARBSEP_V2_TESTNET,
-    contractName: 'MyOFT',
+    contractName: 'wXTM',
 }
 
 // To connect all the above chains to each other, we need the following pathways:
