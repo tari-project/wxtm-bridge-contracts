@@ -19,18 +19,18 @@ contract wXTMBridgeTest is TestHelperOz5 {
     wXTMBridge private bridge;
 
     address private multiSig;
-    address private tari;
     uint256 private multiSigKey;
-    uint256 private tariKey;
+    address private user;
+    uint256 private userSigKey;
 
     uint256 private constant STARTING_BALANCE = 100 ether;
 
     function setUp() public virtual override {
         (multiSig, multiSigKey) = makeAddrAndKey("multiSig");
-        (tari, tariKey) = makeAddrAndKey("tari");
+        (user, userSigKey) = makeAddrAndKey("user");
 
         deal(multiSig, STARTING_BALANCE);
-        deal(tari, STARTING_BALANCE);
+        deal(user, STARTING_BALANCE);
 
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
@@ -39,7 +39,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTM).creationCode,
                 abi.encode(address(endpoints[aEid])),
-                abi.encodeWithSelector(wXTM.initialize.selector, "WrappedXTM", "WXTM", multiSig)
+                abi.encodeWithSelector(wXTM.initialize.selector, "WrappedXTM", "WXTM", "1", multiSig)
             )
         );
 
@@ -50,53 +50,61 @@ contract wXTMBridgeTest is TestHelperOz5 {
         ofts[0] = address(wxtm);
         this.wireOApps(ofts);
 
-        /** @dev Add some tokens for tari and multiSig */
+        /** @dev Mint some wXTM for user */
         vm.prank(multiSig);
-        wxtm.mint(multiSig, 10 ether);
+        wxtm.mint(user, 10 ether);
     }
 
-    // To be fixed
+    function test_bridge_to_tari() public {
+        uint256 value = 3 ether;
+
+        vm.startPrank(user);
+        wxtm.approve(address(bridge), value);
+        bridge.bridgeToTari("tariExampleAddress", value);
+        vm.stopPrank();
+
+        assertEq(wxtm.balanceOf(address(bridge)), 0);
+        assertEq(wxtm.balanceOf(user), 7 ether);
+    }
+
     function test_receive_with_authorization() public {
         uint256 value = 3 ether;
         uint256 validAfter = block.timestamp;
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = keccak256("mint-1");
+        bytes32 nonce = keccak256("unique-nonce");
 
-        // Build digest and sign it
-        bytes32 digest = getDigest(
-            wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(),
-            multiSig,
-            address(bridge),
-            value,
-            validAfter,
-            validBefore,
-            nonce
-        );
+        // Generate EIP712 signature
+        bytes32 digest = _getDigest(user, address(bridge), value, validAfter, validBefore, nonce);
 
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(multiSigKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userSigKey, digest);
 
-        vm.prank(address(bridge));
-        bridge.bridgeToTariWithAuthorization("tariWalletAddress", value, validAfter, validBefore, nonce, v, r, s);
+        // Simulate user calling the bridge
+        vm.prank(user);
+        bridge.bridgeToTariWithAuthorization("tariExampleAddress", value, validAfter, validBefore, nonce, v, r, s);
 
-        assertEq(wxtm.balanceOf(multiSig), 0 ether);
+        assertEq(wxtm.balanceOf(address(bridge)), 0);
+        assertEq(wxtm.balanceOf(user), 7 ether);
     }
 
-    function getDigest(
-        bytes32 typeHash,
+    function _getDigest(
         address from,
         address to,
         uint256 value,
         uint256 validAfter,
         uint256 validBefore,
         bytes32 nonce
-    ) internal pure returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(typeHash, from, to, value, validAfter, validBefore, nonce));
+    ) internal view returns (bytes32) {
+        bytes32 structHash = keccak256(
+            abi.encode(wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(), from, to, value, validAfter, validBefore, nonce)
+        );
         /** @dev Domain hardcoded to avoid exposing _domainSeparatorV4() from wXTMBridge contract */
-        bytes32 domainSeparator = 0xb7ae7eb7a2f74a0c8b77c75a7320918c1e27d40c1aa2a9eabb90dcfa54fc1e94;
+        bytes32 domainSeparator = 0x336abe5edc8eeaf6093e7e0267afdba268dd1492979658c9d6164b1255653dd6;
 
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
+    /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */
+    // but this import overrides a lot of variables, so its simpler to stick with below function only
     function _deployContractAndProxy(
         bytes memory _oappBytecode,
         bytes memory _constructorArgs,
