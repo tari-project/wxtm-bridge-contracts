@@ -67,18 +67,14 @@ const deploy: DeployFunction = async (hre) => {
         },
     })
 
-    console.log(`Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}`)
+    console.log(
+        `Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
+    )
 
-    /** @dev Below is buggen with current 'upgrades' */
-    // Retrieve the implementation address
-    // const currentImplAddress = await upgrades.erc1967.getImplementationAddress(proxy.address)
-    // const proxyAdmin = await upgrades.erc1967.getAdminAddress(proxy.address)
-
-    // console.log(`Proxy: ${proxy.address} Admin: ${proxyAdmin}`)
-    // console.log(`Implementation address: ${currentImplAddress} network: ${hre.network.name}`)
-
-    // Verify
-    // await verify(currentImplAddress, [address])
+    /** @dev Verify Implementation */
+    if (proxy.implementation) {
+        await verify(proxy.implementation, [address])
+    }
 }
 
 deploy.tags = [contractName]
