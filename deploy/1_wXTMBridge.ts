@@ -25,7 +25,8 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
 
-    const salt = ethers.utils.id('wXTM-deployment')
+    /** @dev Consider removing 'salt' here as we deploy wXTMBridge to one network only */
+    const salt = ethers.utils.id('wXTM-deployment_v0.0.1')
 
     const wXTMBridge = await deploy(contractName, {
         from: deployer,

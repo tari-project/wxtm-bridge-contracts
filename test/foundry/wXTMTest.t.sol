@@ -20,6 +20,7 @@ import { OFTComposeMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTCom
 // OZ imports
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 // Forge imports
 import "forge-std/console.sol";
@@ -36,25 +37,34 @@ contract wXTMTest is TestHelperOz5 {
     wXTM private aOFT;
     wXTM private bOFT;
 
+    address private proxyAdmin = makeAddr("proxyAdmin");
     address private userA = makeAddr("userA");
     address private userB = makeAddr("userB");
     uint256 private initialBalance = 100 ether;
 
     function setUp() public virtual override {
-        vm.deal(userA, 1000 ether);
-        vm.deal(userB, 1000 ether);
+        vm.deal(proxyAdmin, 1000 ether);
+        vm.deal(userA, initialBalance);
+        vm.deal(userB, initialBalance);
 
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
 
         aOFT = wXTM(
-            _deployOApp(type(wXTM).creationCode, abi.encode("aOFT", "aOFT", address(endpoints[aEid]), address(this)))
+            _deployContractAndProxy(
+                type(wXTM).creationCode,
+                abi.encode(address(endpoints[aEid])),
+                abi.encodeWithSelector(wXTM.initialize.selector, "aOFT", "aOFT", "1", address(this))
+            )
         );
-        console.log("wXTM");
-        console.log("Eid: ", address(endpoints[aEid]));
+        // console.log("Eid: ", address(endpoints[aEid]));
 
         bOFT = wXTM(
-            _deployOApp(type(wXTM).creationCode, abi.encode("bOFT", "bOFT", address(endpoints[bEid]), address(this)))
+            _deployContractAndProxy(
+                type(wXTM).creationCode,
+                abi.encode(address(endpoints[bEid])),
+                abi.encodeWithSelector(wXTM.initialize.selector, "bOFT", "bOFT", "1", address(this))
+            )
         );
 
         // config and wire the ofts
@@ -173,5 +183,23 @@ contract wXTMTest is TestHelperOz5 {
         assertEq(composer.message(), composerMsg_);
         assertEq(composer.executor(), address(this));
         assertEq(composer.extraData(), composerMsg_); // default to setting the extraData to the message as well to test
+    }
+
+    /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */
+    // but this import overrides a lot of variables, so its simpler to stick with below function only
+    function _deployContractAndProxy(
+        bytes memory _oappBytecode,
+        bytes memory _constructorArgs,
+        bytes memory _initializeArgs
+    ) internal returns (address addr) {
+        bytes memory bytecode = bytes.concat(abi.encodePacked(_oappBytecode), _constructorArgs);
+        assembly {
+            addr := create(0, add(bytecode, 0x20), mload(bytecode))
+            if iszero(extcodesize(addr)) {
+                revert(0, 0)
+            }
+        }
+
+        return address(new TransparentUpgradeableProxy(addr, proxyAdmin, _initializeArgs));
     }
 }

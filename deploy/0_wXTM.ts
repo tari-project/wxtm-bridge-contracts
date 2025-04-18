@@ -57,21 +57,24 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', deployer], // initializer args
+                    args: ['WrappedXTM', 'wXTM', '1', deployer], // initializer args
+                },
+                onUpgrade: {
+                    methodName: 'initialize',
+                    args: ['WrappedXTM', 'wXTM', '2', deployer], // initializer args
                 },
             },
         },
     })
 
-    console.log(`Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}`)
+    console.log(
+        `Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
+    )
 
-    // Retrieve the implementation address
-    const currentImplAddress = await upgrades.erc1967.getImplementationAddress(proxy.address)
-
-    console.log(`Implementation address: ${currentImplAddress} network: ${hre.network.name}`)
-
-    // Verify
-    await verify(currentImplAddress, [address])
+    /** @dev Verify Implementation */
+    if (proxy.implementation) {
+        await verify(proxy.implementation, [address])
+    }
 }
 
 deploy.tags = [contractName]

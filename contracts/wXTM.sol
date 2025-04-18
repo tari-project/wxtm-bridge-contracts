@@ -10,9 +10,15 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         _disableInitializers();
     }
 
-    function initialize(string memory _name, string memory _symbol, address _delegate) external initializer {
-        __OFT_init(_name, _symbol, _delegate);
+    function initialize(
+        string memory _name,
+        string memory _symbol,
+        string memory _version,
+        address _delegate
+    ) external initializer {
         __Ownable_init(_delegate);
+        __OFT_init(_name, _symbol, _delegate);
+        __EIP712_init(_symbol, _version);
     }
 
     /** @dev Below functions are allowed to use by multi-sig-wallet only */
@@ -20,8 +26,8 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         _mint(_to, _amount);
     }
 
-    function burn(address _from, uint256 _amount) external onlyOwner {
-        _burn(_from, _amount);
+    function burn(uint256 _amount) external {
+        _burn(msg.sender, _amount);
     }
 
     function receiveWithAuthorization(
