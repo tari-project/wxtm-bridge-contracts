@@ -18,7 +18,7 @@ contract wXTMBridge is Ownable {
     function bridgeToTari(string memory targetTariAddress, uint256 value) external {
         IERC20(wXTM).transferFrom(msg.sender, address(this), value);
 
-        IwXTM(wXTM).burn(address(this), value);
+        IwXTM(wXTM).burn(value);
 
         emit TokensUnwrapped(msg.sender, targetTariAddress, value);
     }
@@ -35,7 +35,7 @@ contract wXTMBridge is Ownable {
     ) external {
         IwXTM(wXTM).receiveWithAuthorization(msg.sender, address(this), value, validAfter, validBefore, nonce, v, r, s);
 
-        IwXTM(wXTM).burn(address(this), value);
+        IwXTM(wXTM).burn(value);
 
         emit TokensUnwrapped(msg.sender, targetTariAddress, value);
     }
