@@ -26,7 +26,7 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Deployer: ${deployer}`)
 
     /** @dev Consider removing 'salt' here as we deploy wXTMBridge to one network only */
-    const salt = ethers.utils.id('wXTM-deployment_v0.0.1')
+    const salt = ethers.utils.id('wXTM-deployment_v0.0.3')
 
     const wXTMBridge = await deploy(contractName, {
         from: deployer,
@@ -37,9 +37,11 @@ const deploy: DeployFunction = async (hre) => {
         skipIfAlreadyDeployed: false,
     })
 
-    console.log(`wXTMBridge contract deployed to network: ${hre.network.name}, address: ${wXTMBridge.address}`)
+    console.log(
+        `wXTMBridge contract deployed to network: ${hre.network.name}, address: ${wXTMBridge.address}, wXTM: ${deployedContracts.wXTM}`
+    )
 
-    await verify(wXTMBridge.address, [deployedContracts.wXTM, deployer])
+    await verify(hre, wXTMBridge.address, [deployedContracts.wXTM, deployer])
 }
 
 deploy.tags = [contractName]
