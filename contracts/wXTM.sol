@@ -10,12 +10,13 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         _disableInitializers();
     }
 
+    /** @dev Consider changing 'reinitializer' into 'initializer' */
     function initialize(
         string memory _name,
         string memory _symbol,
         string memory _version,
         address _delegate
-    ) external initializer {
+    ) external reinitializer(2) {
         __Ownable_init(_delegate);
         __OFT_init(_name, _symbol, _delegate);
         __EIP712_init(_symbol, _version);

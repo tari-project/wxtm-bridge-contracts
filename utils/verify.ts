@@ -1,9 +1,9 @@
-import { run } from 'hardhat'
+import type { HardhatRuntimeEnvironment } from 'hardhat/types'
 
-const verify = async (contractAddress: string, args: any[]) => {
+const verify = async (hre: HardhatRuntimeEnvironment, contractAddress: string, args: any[]) => {
     console.log('Verifying contract...')
     try {
-        await run('verify:verify', {
+        await hre.run('verify:verify', {
             address: contractAddress,
             constructorArguments: args,
         })
@@ -11,7 +11,7 @@ const verify = async (contractAddress: string, args: any[]) => {
         if (e.message.toLowerCase().includes('already verified')) {
             console.log('Already verified!')
         } else {
-            console.log(e)
+            console.error(e)
         }
     }
 }

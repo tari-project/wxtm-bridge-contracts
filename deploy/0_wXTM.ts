@@ -1,8 +1,8 @@
+import { type DeployFunction } from 'hardhat-deploy/types'
+
 import assert from 'assert'
 import verify from '../utils/verify'
-
-import { type DeployFunction } from 'hardhat-deploy/types'
-import { ethers, upgrades } from 'hardhat'
+import { ethers } from 'hardhat'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
@@ -61,7 +61,7 @@ const deploy: DeployFunction = async (hre) => {
                 },
                 onUpgrade: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '2', deployer], // initializer args
+                    args: ['WrappedXTM', 'wXTM', '4', deployer], // initializer args
                 },
             },
         },
@@ -73,7 +73,7 @@ const deploy: DeployFunction = async (hre) => {
 
     /** @dev Verify Implementation */
     if (proxy.implementation) {
-        await verify(proxy.implementation, [address])
+        await verify(hre, proxy.implementation, [address])
     }
 }
 
