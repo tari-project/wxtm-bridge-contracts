@@ -26,5 +26,15 @@ ifeq ($(findstring --network sepolia,$(ARGS)),--network sepolia)
 	NETWORK_ARGS:= --rpc-url $(SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY) --broadcast --verify --etherscan-api-key $(ETHERSCAN_API_KEY) -vvvv
 endif
 
+ifeq ($(findstring --network base_sepolia,$(ARGS)),--network base_sepolia)
+	NETWORK_ARGS:= --rpc-url $(BASE_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY) --broadcast --verify --etherscan-api-key $(ETHERSCAN_API_KEY) -vvvv
+endif
+
 call:
 	@forge script scripts/Interactions.s.sol:CallProxy $(NETWORK_ARGS)
+
+setPeer:
+	@forge script scripts/Interactions.s.sol:SetPeer $(NETWORK_ARGS)
+
+bridge:
+	@forge script scripts/Interactions.s.sol:SendTokens $(NETWORK_ARGS)
