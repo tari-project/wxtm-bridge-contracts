@@ -10,6 +10,11 @@
 
 `npx hardhat run scripts/verify.ts --network sepolia-testnet`
 
+#### **Set Peers - Create Connections Between Contracts**
+
+`npx hardhat lz:oapp:wire --oapp-config layerzero.config.ts`
+Setup info: https://docs.layerzero.network/v2/developers/evm/technical-reference/simple-config
+
 #### **Ineract With Smartcontract**
 
 `make call ARGS="--network sepolia"`
