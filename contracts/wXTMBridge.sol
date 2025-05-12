@@ -2,11 +2,14 @@
 pragma solidity ^0.8.22;
 
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
 contract wXTMBridge is Ownable {
+    using SafeERC20 for IERC20;
+
     address private immutable wXTM;
 
     event TokensUnwrapped(address indexed from, string targetTariAddress, uint256 indexed amount);
@@ -16,7 +19,7 @@ contract wXTMBridge is Ownable {
     }
 
     function bridgeToTari(string memory targetTariAddress, uint256 value) external {
-        IERC20(wXTM).transferFrom(msg.sender, address(this), value);
+        IERC20(wXTM).safeTransferFrom(msg.sender, address(this), value);
 
         IwXTM(wXTM).burn(value);
 
