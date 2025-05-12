@@ -35,6 +35,7 @@ const arbitrumContract: OmniPointHardhat = {
 // Optimism <-> Arbitrum
 // Avalanche <-> Arbitrum
 
+/** @dev Gas to be adjusted based on contract size and both executed messages costs */
 // For this example's simplicity, we will use the same enforced options values for sending to all chains
 // For production, you should ensure `gas` is set to the correct value through profiling the gas usage of calling OFT._lzReceive(...) on the destination chain
 // To learn more, read https://docs.layerzero.network/v2/concepts/applications/oapp-standard#execution-options-and-enforced-settings
@@ -42,11 +43,12 @@ const EVM_ENFORCED_OPTIONS: OAppEnforcedOption[] = [
     {
         msgType: 1,
         optionType: ExecutorOptionType.LZ_RECEIVE,
-        gas: 80000,
+        gas: 100000,
         value: 0,
     },
 ]
 
+/** @dev Default confirmations settings: https://layerzeroscan.com/tools/defaults */
 // With the config generator, pathways declared are automatically bidirectional
 // i.e. if you declare A,B there's no need to declare B,A
 const pathways: TwoWayConfig[] = [
@@ -54,28 +56,28 @@ const pathways: TwoWayConfig[] = [
         sepoliaContract, // Chain A contract
         baseSepoliaContract, // Chain B contract
         [['LayerZero Labs'], []], // [ requiredDVN[], [ optionalDVN[], threshold ] ]
-        [1, 1], // [A to B confirmations, B to A confirmations]
+        [15, 10], // [A to B confirmations, B to A confirmations]
         [EVM_ENFORCED_OPTIONS, EVM_ENFORCED_OPTIONS], // Chain B enforcedOptions, Chain A enforcedOptions
     ],
     [
         optimismContract, // Chain A contract
         avalancheContract, // Chain B contract
         [['LayerZero Labs'], []], // [ requiredDVN[], [ optionalDVN[], threshold ] ]
-        [1, 1], // [A to B confirmations, B to A confirmations]
+        [20, 12], // [A to B confirmations, B to A confirmations]
         [EVM_ENFORCED_OPTIONS, EVM_ENFORCED_OPTIONS], // Chain B enforcedOptions, Chain A enforcedOptions
     ],
     [
         optimismContract, // Chain A contract
         arbitrumContract, // Chain C contract
         [['LayerZero Labs'], []], // [ requiredDVN[], [ optionalDVN[], threshold ] ]
-        [1, 1], // [A to B confirmations, B to A confirmations]
+        [20, 20], // [A to B confirmations, B to A confirmations]
         [EVM_ENFORCED_OPTIONS, EVM_ENFORCED_OPTIONS], // Chain C enforcedOptions, Chain A enforcedOptions
     ],
     [
         avalancheContract, // Chain B contract
         arbitrumContract, // Chain C contract
         [['LayerZero Labs'], []], // [ requiredDVN[], [ optionalDVN[], threshold ] ]
-        [1, 1], // [A to B confirmations, B to A confirmations]
+        [12, 20], // [A to B confirmations, B to A confirmations]
         [EVM_ENFORCED_OPTIONS, EVM_ENFORCED_OPTIONS], // Chain C enforcedOptions, Chain B enforcedOptions
     ],
 ]
