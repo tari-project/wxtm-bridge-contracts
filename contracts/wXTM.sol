@@ -12,19 +12,18 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         _disableInitializers();
     }
 
-    /** @dev Consider changing 'reinitializer' into 'initializer' */
     function initialize(
         string memory _name,
         string memory _symbol,
         string memory _version,
         address _delegate
-    ) external reinitializer(2) {
+    ) external initializer {
         __Ownable_init(_delegate);
         __OFT_init(_name, _symbol, _delegate);
         __EIP712_init(_symbol, _version);
     }
 
-    /** @dev Below functions are allowed to use by multi-sig-wallet only */
+    /** @dev Mint can be used by multi-sig-wallet only */
     function mint(address _to, uint256 _amount) external onlyOwner {
         _mint(_to, _amount);
     }
