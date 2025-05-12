@@ -2,7 +2,6 @@
 pragma solidity ^0.8.22;
 
 import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft/OFTUpgradeable.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
 
 contract wXTM is OFTUpgradeable, EIP3009 {
