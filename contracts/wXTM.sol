@@ -2,32 +2,34 @@
 pragma solidity ^0.8.22;
 
 import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft/OFTUpgradeable.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
 
 contract wXTM is OFTUpgradeable, EIP3009 {
+    error ZeroAmount();
+
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
         _disableInitializers();
     }
 
-    /** @dev Consider changing 'reinitializer' into 'initializer' */
     function initialize(
         string memory _name,
         string memory _symbol,
         string memory _version,
         address _delegate
-    ) external reinitializer(2) {
+    ) external initializer {
         __Ownable_init(_delegate);
         __OFT_init(_name, _symbol, _delegate);
         __EIP712_init(_symbol, _version);
     }
 
-    /** @dev Below functions are allowed to use by multi-sig-wallet only */
+    /** @dev Mint can be used by multi-sig-wallet only */
     function mint(address _to, uint256 _amount) external onlyOwner {
         _mint(_to, _amount);
     }
 
     function burn(uint256 _amount) external {
+        if (_amount == 0) revert ZeroAmount();
+
         _burn(msg.sender, _amount);
     }
 

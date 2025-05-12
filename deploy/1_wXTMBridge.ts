@@ -30,7 +30,7 @@ const deploy: DeployFunction = async (hre) => {
 
     const wXTMBridge = await deploy(contractName, {
         from: deployer,
-        args: [deployedContracts.wXTM, deployer],
+        args: [deployedContracts.wXTM],
         deterministicDeployment: salt,
         log: true,
         waitConfirmations: 1,
@@ -41,7 +41,7 @@ const deploy: DeployFunction = async (hre) => {
         `wXTMBridge contract deployed to network: ${hre.network.name}, address: ${wXTMBridge.address}, wXTM: ${deployedContracts.wXTM}`
     )
 
-    await verify(hre, wXTMBridge.address, [deployedContracts.wXTM, deployer])
+    await verify(hre, wXTMBridge.address, [deployedContracts.wXTM])
 }
 
 deploy.tags = [contractName]

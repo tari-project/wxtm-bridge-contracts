@@ -185,6 +185,16 @@ contract wXTMTest is TestHelperOz5 {
         assertEq(composer.extraData(), composerMsg_); // default to setting the extraData to the message as well to test
     }
 
+    function test_cant_burn_zero() public {
+        uint amount = 0;
+
+        vm.prank(userA);
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        aOFT.burn(amount);
+
+        assertEq(aOFT.balanceOf(userA), initialBalance);
+    }
+
     /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */
     // but this import overrides a lot of variables, so its simpler to stick with below function only
     function _deployContractAndProxy(

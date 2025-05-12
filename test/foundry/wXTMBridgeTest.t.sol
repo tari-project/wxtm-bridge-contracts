@@ -43,7 +43,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
             )
         );
 
-        bridge = new wXTMBridge(address(wxtm), multiSig);
+        bridge = new wXTMBridge(address(wxtm));
 
         // config and wire the ofts
         address[] memory ofts = new address[](1);
@@ -53,6 +53,20 @@ contract wXTMBridgeTest is TestHelperOz5 {
         /** @dev Mint some wXTM for user */
         vm.prank(multiSig);
         wxtm.mint(user, 10 ether);
+    }
+
+    function test_cant_bridge_zero_to_tari() public {
+        uint256 value = 0 ether;
+
+        vm.startPrank(user);
+        wxtm.approve(address(bridge), value);
+
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        bridge.bridgeToTari("tariExampleAddress", value);
+        vm.stopPrank();
+
+        assertEq(wxtm.balanceOf(address(bridge)), 0);
+        assertEq(wxtm.balanceOf(user), 10 ether);
     }
 
     function test_bridge_to_tari() public {
