@@ -86,6 +86,20 @@ contract wXTMBridgeTest is TestHelperOz5 {
         assertEq(wxtm.balanceOf(user), 7 ether);
     }
 
+    function test_cant_bridge_zero_to_tari() public {
+        uint256 value = 0 ether;
+
+        vm.startPrank(user);
+        wxtm.approve(address(bridge), value);
+
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        bridge.bridgeToTari("tariExampleAddress", value);
+        vm.stopPrank();
+
+        assertEq(wxtm.balanceOf(address(bridge)), 0);
+        assertEq(wxtm.balanceOf(user), 10 ether);
+    }
+
     function _getDigest(
         address from,
         address to,

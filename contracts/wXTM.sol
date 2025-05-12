@@ -6,6 +6,8 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
 
 contract wXTM is OFTUpgradeable, EIP3009 {
+    error ZeroAmount();
+
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
         _disableInitializers();
     }
@@ -28,6 +30,8 @@ contract wXTM is OFTUpgradeable, EIP3009 {
     }
 
     function burn(uint256 _amount) external {
+        if (_amount == 0) revert ZeroAmount();
+
         _burn(msg.sender, _amount);
     }
 
