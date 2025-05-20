@@ -4,11 +4,19 @@ pragma solidity ^0.8.22;
 import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft/OFTUpgradeable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
 
+import { IwXTMController } from "./interfaces/IwXTMController.sol";
+
 contract wXTM is OFTUpgradeable, EIP3009 {
     error ZeroAmount();
+    error Unauthorized();
 
-    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
+    uint256 private constant HIGH_MINT_THRESHOLD = 100_000 ether;
+
+    IwXTMController private immutable controller;
+
+    constructor(address _lzEndpoint, address _controller) OFTUpgradeable(_lzEndpoint) {
         _disableInitializers();
+        controller = IwXTMController(_controller);
     }
 
     function initialize(
@@ -22,8 +30,17 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         __EIP712_init(_symbol, _version);
     }
 
-    /** @dev Mint can be used by multi-sig-wallet only */
-    function mint(address _to, uint256 _amount) external onlyOwner {
+    /** @dev Mint can only be called by multi-sig-wallets with access control */
+    function mint(address _to, uint256 _amount) external {
+        if (_amount > HIGH_MINT_THRESHOLD) {
+            if (!controller.hasRole(controller.HIGH_MINTER_ROLE(), msg.sender)) revert Unauthorized();
+        } else if (
+            !controller.hasRole(controller.LOW_MINTER_ROLE(), msg.sender) &&
+            !controller.hasRole(controller.HIGH_MINTER_ROLE(), msg.sender)
+        ) {
+            revert Unauthorized();
+        }
+
         _mint(_to, _amount);
     }
 
