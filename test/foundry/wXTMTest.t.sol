@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.22;
 
-// Mock imports
+// Contract imports
 import { wXTM } from "../../contracts/wXTM.sol";
+import { wXTMController } from "../../contracts/wXTMController.sol";
 
+// Mock imports
 import { ERC20Mock } from "../mocks/ERC20Mock.sol";
 import { OFTComposerMock } from "../mocks/OFTComposerMock.sol";
 
@@ -19,7 +21,6 @@ import { OFTComposeMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTCom
 
 // OZ imports
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 // Forge imports
@@ -34,65 +35,89 @@ contract wXTMTest is TestHelperOz5 {
     uint32 private aEid = 1; // 40161 -> Sepolia;
     uint32 private bEid = 2; // 40245 -> Base Sepolia;
 
+    wXTMController private controller;
     wXTM private aOFT;
     wXTM private bOFT;
 
     address private proxyAdmin = makeAddr("proxyAdmin");
     address private userA = makeAddr("userA");
     address private userB = makeAddr("userB");
-    uint256 private initialBalance = 100 ether;
+    address private admin = makeAddr("admin");
+    address private lowMinter = makeAddr("lowMinter");
+    address private highMinter = makeAddr("highMinter");
+
+    uint256 private constant INITIAL_BALANCE = 100 ether;
 
     function setUp() public virtual override {
         vm.deal(proxyAdmin, 1000 ether);
-        vm.deal(userA, initialBalance);
-        vm.deal(userB, initialBalance);
+        vm.deal(userA, INITIAL_BALANCE);
+        vm.deal(userB, INITIAL_BALANCE);
+        vm.deal(admin, INITIAL_BALANCE);
+        vm.deal(lowMinter, INITIAL_BALANCE);
+        vm.deal(highMinter, INITIAL_BALANCE);
 
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
 
+        vm.prank(admin);
+        controller = new wXTMController();
+        controller.initialize(lowMinter, highMinter, admin);
+
         aOFT = wXTM(
             _deployContractAndProxy(
                 type(wXTM).creationCode,
-                abi.encode(address(endpoints[aEid])),
+                abi.encode(address(endpoints[aEid]), address(controller)),
                 abi.encodeWithSelector(wXTM.initialize.selector, "aOFT", "aOFT", "1", address(this))
             )
         );
-        // console.log("Eid: ", address(endpoints[aEid]));
 
         bOFT = wXTM(
             _deployContractAndProxy(
                 type(wXTM).creationCode,
-                abi.encode(address(endpoints[bEid])),
+                abi.encode(address(endpoints[bEid]), address(controller)),
                 abi.encodeWithSelector(wXTM.initialize.selector, "bOFT", "bOFT", "1", address(this))
             )
         );
 
-        // config and wire the ofts
+        /** @dev Config and wire the ofts */
         address[] memory ofts = new address[](2);
         ofts[0] = address(aOFT);
         ofts[1] = address(bOFT);
         this.wireOApps(ofts);
 
-        // mint tokens
-        aOFT.mint(userA, initialBalance);
-        bOFT.mint(userB, initialBalance);
+        vm.startPrank(lowMinter);
+        aOFT.mint(userA, INITIAL_BALANCE);
+        bOFT.mint(userB, INITIAL_BALANCE);
+        vm.stopPrank();
     }
 
     function test_unauthorized_cannot_mint() public {
         vm.startPrank(address(666));
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(666)));
-        aOFT.mint(userA, initialBalance);
+        vm.expectRevert(wXTM.Unauthorized.selector);
+        aOFT.mint(userA, INITIAL_BALANCE);
 
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(666)));
-        bOFT.mint(userB, initialBalance);
+        vm.expectRevert(wXTM.Unauthorized.selector);
+        bOFT.mint(userB, INITIAL_BALANCE);
+        vm.stopPrank();
+    }
+
+    function test_authorized_can_mint_only_proper_amount() public {
+        vm.prank(lowMinter);
+        vm.expectRevert(wXTM.Unauthorized.selector);
+        aOFT.mint(userA, 100_001 ether);
+
+        vm.startPrank(highMinter);
+        aOFT.mint(userA, 5);
+        aOFT.mint(userA, 200_000 ether);
+        vm.stopPrank();
     }
 
     function test_wxtm_constructor() public view {
         assertEq(aOFT.owner(), address(this));
         assertEq(bOFT.owner(), address(this));
 
-        assertEq(aOFT.balanceOf(userA), initialBalance);
-        assertEq(bOFT.balanceOf(userB), initialBalance);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
+        assertEq(bOFT.balanceOf(userB), INITIAL_BALANCE);
 
         assertEq(aOFT.token(), address(aOFT));
         assertEq(bOFT.token(), address(bOFT));
@@ -113,15 +138,15 @@ contract wXTMTest is TestHelperOz5 {
         );
         MessagingFee memory fee = aOFT.quoteSend(sendParam, false);
 
-        assertEq(aOFT.balanceOf(userA), initialBalance);
-        assertEq(bOFT.balanceOf(userB), initialBalance);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
+        assertEq(bOFT.balanceOf(userB), INITIAL_BALANCE);
 
         vm.prank(userA);
         aOFT.send{ value: fee.nativeFee }(sendParam, fee, payable(address(this)));
         verifyPackets(bEid, addressToBytes32(address(bOFT)));
 
-        assertEq(aOFT.balanceOf(userA), initialBalance - tokensToSend);
-        assertEq(bOFT.balanceOf(userB), initialBalance + tokensToSend);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE - tokensToSend);
+        assertEq(bOFT.balanceOf(userB), INITIAL_BALANCE + tokensToSend);
     }
 
     function test_send_wxtm_oft_compose_msg() public {
@@ -148,7 +173,7 @@ contract wXTMTest is TestHelperOz5 {
 
         MessagingFee memory fee = aOFT.quoteSend(sendParam, false);
 
-        assertEq(aOFT.balanceOf(userA), initialBalance);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
         assertEq(bOFT.balanceOf(address(composer)), 0);
 
         vm.prank(userA);
@@ -175,7 +200,7 @@ contract wXTMTest is TestHelperOz5 {
 
         this.lzCompose(dstEid_, from_, options_, guid_, to_, composerMsg_);
 
-        assertEq(aOFT.balanceOf(userA), initialBalance - tokensToSend);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE - tokensToSend);
         assertEq(bOFT.balanceOf(address(composer)), tokensToSend);
 
         assertEq(composer.from(), from_);
@@ -192,7 +217,7 @@ contract wXTMTest is TestHelperOz5 {
         vm.expectRevert(wXTM.ZeroAmount.selector);
         aOFT.burn(amount);
 
-        assertEq(aOFT.balanceOf(userA), initialBalance);
+        assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
     }
 
     /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */
