@@ -3,6 +3,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import assert from 'assert'
 import verify from '../utils/verify'
 import { ethers } from 'hardhat'
+import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
@@ -13,6 +14,7 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
+    const deployedContracts = getDeployments(11155111)
 
     assert(deployer, 'Missing named deployer account')
 
@@ -46,7 +48,7 @@ const deploy: DeployFunction = async (hre) => {
 
     const proxy = await deploy(contractName, {
         from: deployer,
-        args: [address],
+        args: [address, deployedContracts.wXTMController],
         deterministicDeployment: salt,
         log: true,
         waitConfirmations: 1,
@@ -57,23 +59,23 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '1', deployer], // initializer args
+                    args: ['WrappedXTM', 'wXTM', '1', deployer],
                 },
                 onUpgrade: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '4', deployer], // initializer args
+                    args: ['WrappedXTM', 'wXTM', '4', deployer],
                 },
             },
         },
     })
 
     console.log(
-        `Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
+        `wXTM proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
     )
 
     /** @dev Verify Implementation */
     if (proxy.implementation) {
-        await verify(hre, proxy.implementation, [address])
+        await verify(hre, proxy.implementation, [address, deployedContracts.wXTMController])
     }
 }
 
