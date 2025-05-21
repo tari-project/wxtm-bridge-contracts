@@ -14,6 +14,10 @@ contract wXTMController is AccessControlUpgradeable {
 
     IwXTM private wxtm;
 
+    constructor() {
+        _disableInitializers();
+    }
+
     function initialize(address _wxtm, address lowMinter, address highMinter, address admin) external initializer {
         __AccessControl_init();
 
