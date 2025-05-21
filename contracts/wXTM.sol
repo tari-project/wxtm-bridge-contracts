@@ -3,9 +3,12 @@ pragma solidity ^0.8.22;
 
 import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft/OFTUpgradeable.sol";
 import { EIP3009 } from "./extensions/EIP3009.sol";
+import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-contract wXTM is OFTUpgradeable, EIP3009 {
+contract wXTM is OFTUpgradeable, EIP3009, AccessControlUpgradeable {
     error ZeroAmount();
+
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
         _disableInitializers();
@@ -20,10 +23,13 @@ contract wXTM is OFTUpgradeable, EIP3009 {
         __Ownable_init(_delegate);
         __OFT_init(_name, _symbol, _delegate);
         __EIP712_init(_symbol, _version);
+        __AccessControl_init();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, _delegate);
     }
 
-    /** @dev Mint can be used by multi-sig-wallet only */
-    function mint(address _to, uint256 _amount) external onlyOwner {
+    /** @dev Mint can only be called by multi-sig-wallets with access control */
+    function mint(address _to, uint256 _amount) external onlyRole(MINTER_ROLE) {
         _mint(_to, _amount);
     }
 

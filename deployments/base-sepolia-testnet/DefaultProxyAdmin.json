@@ -1,5 +1,5 @@
 {
-  "address": "0x9Cc6912FabdeCE5f51fa64f0D4DCb869c7aaEd63",
+  "address": "0x4659Ec87b852C7BcAA2C2988f81e1c20edADab65",
   "abi": [
     {
       "inputs": [
@@ -163,7 +163,7 @@
     }
   ],
   "args": [
-    "0xB3f8CbaE6D645E235C2Bd7eE3bbfa9125294C5c2"
+    "0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3"
   ],
   "numDeployments": 2,
   "solcInputHash": "0e89febeebc7444140de8e67c9067d2c",

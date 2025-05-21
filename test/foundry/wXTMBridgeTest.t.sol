@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.22;
 
+// Contract imports
 import { wXTM } from "../../contracts/wXTM.sol";
 import { wXTMBridge } from "../../contracts/wXTMBridge.sol";
+import { wXTMController } from "../../contracts/wXTMController.sol";
 
 // DevTools imports
 import { console } from "forge-std/Test.sol";
@@ -10,27 +12,33 @@ import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contract
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract wXTMBridgeTest is TestHelperOz5 {
-    event DomainXX(bytes32);
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     uint32 private aEid = 1;
     uint32 private bEid = 2;
 
     wXTM private wxtm;
     wXTMBridge private bridge;
+    wXTMController private controller;
 
     address private multiSig;
     uint256 private multiSigKey;
     address private user;
     uint256 private userSigKey;
+    address private lowMinter;
+    address private highMinter;
 
-    uint256 private constant STARTING_BALANCE = 100 ether;
+    uint256 private constant INITIAL_BALANCE = 100 ether;
 
     function setUp() public virtual override {
         (multiSig, multiSigKey) = makeAddrAndKey("multiSig");
         (user, userSigKey) = makeAddrAndKey("user");
 
-        deal(multiSig, STARTING_BALANCE);
-        deal(user, STARTING_BALANCE);
+        lowMinter = makeAddr("lowMinter");
+        highMinter = makeAddr("highMinter");
+
+        deal(multiSig, INITIAL_BALANCE);
+        deal(user, INITIAL_BALANCE);
 
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
@@ -43,15 +51,22 @@ contract wXTMBridgeTest is TestHelperOz5 {
             )
         );
 
+        controller = new wXTMController();
+        controller.initialize(address(wxtm), lowMinter, highMinter, multiSig);
+
         bridge = new wXTMBridge(address(wxtm));
 
-        // config and wire the ofts
+        /** @dev Assign MINTER_ROLE */
+        vm.prank(multiSig);
+        wxtm.grantRole(MINTER_ROLE, address(controller));
+
+        /** @dev Config and wire the ofts */
         address[] memory ofts = new address[](1);
         ofts[0] = address(wxtm);
         this.wireOApps(ofts);
 
         /** @dev Mint some wXTM for user */
-        vm.prank(multiSig);
+        vm.prank(address(controller));
         wxtm.mint(user, 10 ether);
     }
 
@@ -111,7 +126,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
         bytes32 structHash = keccak256(
             abi.encode(wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(), from, to, value, validAfter, validBefore, nonce)
         );
-        /** @dev Domain hardcoded to avoid exposing _domainSeparatorV4() from wXTMBridge contract */
+        /** @dev Domain hardcoded to avoid exposing _domainSeparatorV4() from wXTM contract */
         bytes32 domainSeparator = 0x336abe5edc8eeaf6093e7e0267afdba268dd1492979658c9d6164b1255653dd6;
 
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));

@@ -49,7 +49,7 @@ const deploy: DeployFunction = async (hre) => {
         args: [address],
         deterministicDeployment: salt,
         log: true,
-        waitConfirmations: 1,
+        waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
@@ -57,18 +57,18 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '1', deployer], // initializer args
+                    args: ['WrappedXTM', 'wXTM', '1', deployer],
                 },
                 onUpgrade: {
-                    methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '4', deployer], // initializer args
+                    methodName: 'initializeV7',
+                    args: ['WrappedXTM', 'wXTM', '7', deployer],
                 },
             },
         },
     })
 
     console.log(
-        `Proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
+        `wXTM proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
     )
 
     /** @dev Verify Implementation */

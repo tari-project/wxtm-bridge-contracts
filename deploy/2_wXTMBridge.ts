@@ -2,8 +2,7 @@ import assert from 'assert'
 import verify from '../utils/verify'
 
 import { type DeployFunction } from 'hardhat-deploy/types'
-import { ethers } from 'hardhat'
-import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments/'
+import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 
 const contractName = 'wXTMBridge'
 
@@ -25,15 +24,11 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
 
-    /** @dev Consider removing 'salt' here as we deploy wXTMBridge to one network only */
-    const salt = ethers.utils.id('wXTM-deployment_v0.0.3')
-
     const wXTMBridge = await deploy(contractName, {
         from: deployer,
         args: [deployedContracts.wXTM],
-        deterministicDeployment: salt,
         log: true,
-        waitConfirmations: 1,
+        waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
     })
 

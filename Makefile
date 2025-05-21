@@ -36,5 +36,8 @@ call:
 setPeer:
 	@forge script scripts/Interactions.s.sol:SetPeer $(NETWORK_ARGS)
 
+setMinter:
+	@forge script scripts/Interactions.s.sol:SetMinter $(NETWORK_ARGS)
+
 bridge:
 	@forge script scripts/Interactions.s.sol:SendTokens $(NETWORK_ARGS)
