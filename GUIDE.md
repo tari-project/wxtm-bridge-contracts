@@ -5,6 +5,7 @@
 #### **Deploy**
 
 `npx hardhat lz:deploy`
+`yarn hardhat lz:deploy --tags wXTMController`
 
 #### **Verify**
 

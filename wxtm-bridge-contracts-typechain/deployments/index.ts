@@ -7,6 +7,7 @@ export type WagmiAddress = `0x${string}`
 export interface Deployments {
     wXTM: WagmiAddress
     wXTMBridge: WagmiAddress
+    wXTMController: WagmiAddress
 }
 
 export type DeployedTestnetChainNames = keyof typeof KNOWN_CHAIN_IDS
@@ -19,5 +20,6 @@ export function getDeployments(chainId: DeployedChain): Deployments {
     return {
         wXTM: dep.wXTM as WagmiAddress,
         wXTMBridge: dep.wXTMBridge as WagmiAddress,
+        wXTMController: dep.wXTMController as WagmiAddress,
     }
 }
