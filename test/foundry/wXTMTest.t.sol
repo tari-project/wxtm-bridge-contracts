@@ -21,6 +21,7 @@ import { OFTComposeMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTCom
 
 // OZ imports
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 // Forge imports
@@ -32,10 +33,13 @@ import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contract
 contract wXTMTest is TestHelperOz5 {
     using OptionsBuilder for bytes;
 
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
     uint32 private aEid = 1; // 40161 -> Sepolia;
     uint32 private bEid = 2; // 40245 -> Base Sepolia;
 
-    wXTMController private controller;
+    wXTMController private aController;
+    wXTMController private bController;
     wXTM private aOFT;
     wXTM private bOFT;
 
@@ -59,14 +63,10 @@ contract wXTMTest is TestHelperOz5 {
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
 
-        vm.prank(admin);
-        controller = new wXTMController();
-        controller.initialize(lowMinter, highMinter, admin);
-
         aOFT = wXTM(
             _deployContractAndProxy(
                 type(wXTM).creationCode,
-                abi.encode(address(endpoints[aEid]), address(controller)),
+                abi.encode(address(endpoints[aEid])),
                 abi.encodeWithSelector(wXTM.initialize.selector, "aOFT", "aOFT", "1", address(this))
             )
         );
@@ -74,10 +74,22 @@ contract wXTMTest is TestHelperOz5 {
         bOFT = wXTM(
             _deployContractAndProxy(
                 type(wXTM).creationCode,
-                abi.encode(address(endpoints[bEid]), address(controller)),
+                abi.encode(address(endpoints[bEid])),
                 abi.encodeWithSelector(wXTM.initialize.selector, "bOFT", "bOFT", "1", address(this))
             )
         );
+
+        vm.prank(admin);
+        aController = new wXTMController();
+        aController.initialize(address(aOFT), lowMinter, highMinter, admin);
+
+        vm.prank(admin);
+        bController = new wXTMController();
+        bController.initialize(address(bOFT), lowMinter, highMinter, admin);
+
+        /** @dev Assign MINTER_ROLE */
+        aOFT.grantRole(MINTER_ROLE, address(aController));
+        bOFT.grantRole(MINTER_ROLE, address(bController));
 
         /** @dev Config and wire the ofts */
         address[] memory ofts = new address[](2);
@@ -85,31 +97,11 @@ contract wXTMTest is TestHelperOz5 {
         ofts[1] = address(bOFT);
         this.wireOApps(ofts);
 
-        vm.startPrank(lowMinter);
-        aOFT.mint(userA, INITIAL_BALANCE);
-        bOFT.mint(userB, INITIAL_BALANCE);
-        vm.stopPrank();
-    }
-
-    function test_unauthorized_cannot_mint() public {
-        vm.startPrank(address(666));
-        vm.expectRevert(wXTM.Unauthorized.selector);
+        vm.prank(address(aController));
         aOFT.mint(userA, INITIAL_BALANCE);
 
-        vm.expectRevert(wXTM.Unauthorized.selector);
+        vm.prank(address(bController));
         bOFT.mint(userB, INITIAL_BALANCE);
-        vm.stopPrank();
-    }
-
-    function test_authorized_can_mint_only_proper_amount() public {
-        vm.prank(lowMinter);
-        vm.expectRevert(wXTM.Unauthorized.selector);
-        aOFT.mint(userA, 100_001 ether);
-
-        vm.startPrank(highMinter);
-        aOFT.mint(userA, 5);
-        aOFT.mint(userA, 200_000 ether);
-        vm.stopPrank();
     }
 
     function test_wxtm_constructor() public view {
@@ -121,6 +113,14 @@ contract wXTMTest is TestHelperOz5 {
 
         assertEq(aOFT.token(), address(aOFT));
         assertEq(bOFT.token(), address(bOFT));
+    }
+
+    function test_unauthorized_cannot_mint() public {
+        vm.prank(address(777));
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, address(777), MINTER_ROLE)
+        );
+        aOFT.mint(userA, INITIAL_BALANCE);
     }
 
     function test_send_wxtm_oft() public {

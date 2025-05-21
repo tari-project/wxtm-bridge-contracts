@@ -69,11 +69,12 @@ contract SendTokens is Script {
         IwXTM proxy = IwXTM(proxyAddress);
 
         uint256 wXTMToSend = 0.1 ether;
-        uint32 bEid = 40245;
+        uint32 sepoliaEid = 40161;
+        // uint32 baseSepoliaEid = 40245;
         bytes memory options = OptionsBuilder.newOptions().addExecutorLzReceiveOption(200_000, 0);
 
         SendParam memory sendParam = SendParam(
-            bEid,
+            sepoliaEid,
             bytes32(uint256(uint160(0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3))),
             wXTMToSend,
             wXTMToSend,

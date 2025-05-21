@@ -12,6 +12,8 @@ import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contract
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract wXTMBridgeTest is TestHelperOz5 {
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
     uint32 private aEid = 1;
     uint32 private bEid = 2;
 
@@ -41,26 +43,30 @@ contract wXTMBridgeTest is TestHelperOz5 {
         super.setUp();
         setUpEndpoints(2, LibraryType.UltraLightNode);
 
-        controller = new wXTMController();
-        controller.initialize(lowMinter, highMinter, multiSig);
-
         wxtm = wXTM(
             _deployContractAndProxy(
                 type(wXTM).creationCode,
-                abi.encode(address(endpoints[aEid]), address(controller)),
+                abi.encode(address(endpoints[aEid])),
                 abi.encodeWithSelector(wXTM.initialize.selector, "WrappedXTM", "WXTM", "1", multiSig)
             )
         );
 
+        controller = new wXTMController();
+        controller.initialize(address(wxtm), lowMinter, highMinter, multiSig);
+
         bridge = new wXTMBridge(address(wxtm));
 
-        // config and wire the ofts
+        /** @dev Assign MINTER_ROLE */
+        vm.prank(multiSig);
+        wxtm.grantRole(MINTER_ROLE, address(controller));
+
+        /** @dev Config and wire the ofts */
         address[] memory ofts = new address[](1);
         ofts[0] = address(wxtm);
         this.wireOApps(ofts);
 
         /** @dev Mint some wXTM for user */
-        vm.prank(lowMinter);
+        vm.prank(address(controller));
         wxtm.mint(user, 10 ether);
     }
 
@@ -121,7 +127,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
             abi.encode(wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(), from, to, value, validAfter, validBefore, nonce)
         );
         /** @dev Domain hardcoded to avoid exposing _domainSeparatorV4() from wXTM contract */
-        bytes32 domainSeparator = 0x35e037e327b3d75790e4044365b56808ac590eaecbc8c33dcc2c99e096951e6e;
+        bytes32 domainSeparator = 0x336abe5edc8eeaf6093e7e0267afdba268dd1492979658c9d6164b1255653dd6;
 
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
