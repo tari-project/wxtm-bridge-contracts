@@ -28,7 +28,7 @@ const deploy: DeployFunction = async (hre) => {
         from: deployer,
         args: [deployedContracts.wXTM],
         log: true,
-        waitConfirmations: 1,
+        waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
     })
 

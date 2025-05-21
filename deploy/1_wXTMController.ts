@@ -3,6 +3,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import assert from 'assert'
 import verify from '../utils/verify'
 import { ethers } from 'hardhat'
+import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 
 const contractName = 'wXTMController'
 
@@ -11,6 +12,7 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
+    const deployedContracts = getDeployments(11155111)
 
     assert(deployer, 'Missing named deployer account')
 
@@ -24,7 +26,7 @@ const deploy: DeployFunction = async (hre) => {
         args: [],
         deterministicDeployment: salt,
         log: true,
-        waitConfirmations: 1,
+        waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
@@ -35,8 +37,8 @@ const deploy: DeployFunction = async (hre) => {
                     args: [deployer, deployer, deployer],
                 },
                 onUpgrade: {
-                    methodName: 'initialize',
-                    args: [deployer, deployer, deployer],
+                    methodName: 'initializeV2',
+                    args: [deployedContracts.wXTM, deployer, deployer, deployer],
                 },
             },
         },

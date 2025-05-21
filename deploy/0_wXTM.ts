@@ -3,7 +3,6 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import assert from 'assert'
 import verify from '../utils/verify'
 import { ethers } from 'hardhat'
-import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
@@ -14,7 +13,6 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(11155111)
 
     assert(deployer, 'Missing named deployer account')
 
@@ -48,10 +46,10 @@ const deploy: DeployFunction = async (hre) => {
 
     const proxy = await deploy(contractName, {
         from: deployer,
-        args: [address, deployedContracts.wXTMController],
+        args: [address],
         deterministicDeployment: salt,
         log: true,
-        waitConfirmations: 1,
+        waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
@@ -75,7 +73,7 @@ const deploy: DeployFunction = async (hre) => {
 
     /** @dev Verify Implementation */
     if (proxy.implementation) {
-        await verify(hre, proxy.implementation, [address, deployedContracts.wXTMController])
+        await verify(hre, proxy.implementation, [address])
     }
 }
 
