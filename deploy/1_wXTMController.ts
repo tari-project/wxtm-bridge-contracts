@@ -37,7 +37,7 @@ const deploy: DeployFunction = async (hre) => {
                     args: [deployer, deployer, deployer],
                 },
                 onUpgrade: {
-                    methodName: 'initializeV2',
+                    methodName: 'initializeV11',
                     args: [deployedContracts.wXTM, deployer, deployer, deployer],
                 },
             },

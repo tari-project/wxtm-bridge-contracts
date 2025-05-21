@@ -60,8 +60,8 @@ const deploy: DeployFunction = async (hre) => {
                     args: ['WrappedXTM', 'wXTM', '1', deployer],
                 },
                 onUpgrade: {
-                    methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '4', deployer],
+                    methodName: 'initializeV7',
+                    args: ['WrappedXTM', 'wXTM', '7', deployer],
                 },
             },
         },
