@@ -19,6 +19,27 @@ interface IwXTM {
         bool _payInLzToken
     ) external view returns (uint256 nativeFee, uint256 lzTokenFee);
     function send(SendParam calldata _sendParam, MessagingFee calldata _fee, address _refundAddress) external payable;
+    function grantRole(bytes32 role, address account) external;
+}
+
+contract SetMinter is Script {
+    bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 private constant LOW_MINTER_ROLE = keccak256("LOW_MINTER_ROLE");
+    bytes32 private constant HIGH_MINTER_ROLE = keccak256("HIGH_MINTER_ROLE");
+
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+
+        address proxyAddress = 0x31999d652476b9e2ef4DEbA560CD39b9Af1AccA5;
+        address controller = 0x8aead919E7716a0840cB84495fA1AC76e04f7845;
+
+        vm.startBroadcast(deployerKey);
+
+        IwXTM proxy = IwXTM(proxyAddress);
+        proxy.grantRole(HIGH_MINTER_ROLE, controller);
+
+        vm.stopBroadcast();
+    }
 }
 
 contract CallProxy is Script {
