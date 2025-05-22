@@ -1,8 +1,3 @@
-// Get the environment configuration from .env file
-//
-// To make use of automatic environment setup:
-// - Duplicate .env.example file and name it .env
-// - Fill in the environment variables
 import 'dotenv/config'
 
 import 'hardhat-deploy'
@@ -13,6 +8,7 @@ import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
 import '@nomicfoundation/hardhat-verify'
+import '@rumblefishdev/hardhat-kms-signer'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
@@ -57,16 +53,21 @@ const config: HardhatUserConfig = {
         ],
     },
     networks: {
-        'sepolia-testnet': {
-            eid: EndpointId.SEPOLIA_V2_TESTNET,
-            url: process.env.RPC_URL_SEPOLIA || 'https://1rpc.io/sepolia',
-            accounts,
+        mainnet: {
+            eid: EndpointId.ETHEREUM_MAINNET,
+            url: process.env.MAINNET_RPC_URL || '',
+            kmsKeyId: process.env.KMS_KEY_ID,
         },
-        'base-sepolia-testnet': {
-            eid: EndpointId.BASESEP_V2_TESTNET,
-            url: process.env.RPC_URL_BASE_SEPOLIA || 'https://sepolia.base.org',
-            accounts,
-        },
+        // 'sepolia-testnet': {
+        //     eid: EndpointId.SEPOLIA_V2_TESTNET,
+        //     url: process.env.RPC_URL_SEPOLIA || 'https://1rpc.io/sepolia',
+        //     kmsKeyId: process.env.KMS_KEY_ID,
+        // },
+        // 'base-sepolia-testnet': {
+        //     eid: EndpointId.BASESEP_V2_TESTNET,
+        //     url: process.env.RPC_URL_BASE_SEPOLIA || 'https://sepolia.base.org',
+        //     accounts,
+        // },
         // 'optimism-testnet': {
         //     eid: EndpointId.OPTSEP_V2_TESTNET,
         //     url: process.env.RPC_URL_OP_SEPOLIA || 'https://optimism-sepolia.gateway.tenderly.co',

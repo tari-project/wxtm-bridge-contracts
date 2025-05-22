@@ -80,12 +80,22 @@ contract wXTMTest is TestHelperOz5 {
         );
 
         vm.prank(admin);
-        aController = new wXTMController();
-        aController.initialize(address(aOFT), lowMinter, highMinter, admin);
+        aController = wXTMController(
+            _deployContractAndProxy(
+                type(wXTMController).creationCode,
+                abi.encode(),
+                abi.encodeWithSelector(wXTMController.initialize.selector, address(aOFT), lowMinter, highMinter, admin)
+            )
+        );
 
         vm.prank(admin);
-        bController = new wXTMController();
-        bController.initialize(address(bOFT), lowMinter, highMinter, admin);
+        bController = wXTMController(
+            _deployContractAndProxy(
+                type(wXTMController).creationCode,
+                abi.encode(),
+                abi.encodeWithSelector(wXTMController.initialize.selector, address(bOFT), lowMinter, highMinter, admin)
+            )
+        );
 
         /** @dev Assign MINTER_ROLE */
         aOFT.grantRole(MINTER_ROLE, address(aController));

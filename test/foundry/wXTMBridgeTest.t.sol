@@ -51,8 +51,19 @@ contract wXTMBridgeTest is TestHelperOz5 {
             )
         );
 
-        controller = new wXTMController();
-        controller.initialize(address(wxtm), lowMinter, highMinter, multiSig);
+        controller = wXTMController(
+            _deployContractAndProxy(
+                type(wXTMController).creationCode,
+                abi.encode(),
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(wxtm),
+                    lowMinter,
+                    highMinter,
+                    multiSig
+                )
+            )
+        );
 
         bridge = new wXTMBridge(address(wxtm));
 
