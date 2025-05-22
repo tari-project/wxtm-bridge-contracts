@@ -42,7 +42,7 @@ const deploy: DeployFunction = async (hre) => {
     const { address } = getDeploymentAddressAndAbi(lzNetworkName, 'EndpointV2')
     console.log('Lz Address: ', address)
 
-    const salt = ethers.utils.id('wXTM-deployment_v0.0.2')
+    const salt = ethers.utils.id('wXTM-v0.0.1')
 
     const proxy = await deploy(contractName, {
         from: deployer,
@@ -60,8 +60,8 @@ const deploy: DeployFunction = async (hre) => {
                     args: ['WrappedXTM', 'wXTM', '1', deployer],
                 },
                 onUpgrade: {
-                    methodName: 'initializeV7',
-                    args: ['WrappedXTM', 'wXTM', '7', deployer],
+                    methodName: 'initializeV1',
+                    args: ['WrappedXTM', 'wXTM', '2', deployer],
                 },
             },
         },

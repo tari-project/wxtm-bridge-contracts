@@ -9,14 +9,16 @@ const contractName = 'wXTMBridge'
 const deploy: DeployFunction = async (hre) => {
     const { getNamedAccounts, deployments } = hre
 
-    if (hre.network.name !== 'sepolia-testnet') {
-        console.log(`Deployment script can only run on the Sepolia network. Current network: ${hre.network.name}`)
-        return
-    }
+    // if (hre.network.name !== 'sepolia-testnet') {
+    //     console.log(`Deployment script can only run on the Sepolia network. Current network: ${hre.network.name}`)
+    //     return
+    // }
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(11155111)
+    const deployedContracts = getDeployments(1)
+
+    console.log('wXTM: ', deployedContracts.wXTM)
 
     assert(deployer, 'Missing named deployer account')
 
