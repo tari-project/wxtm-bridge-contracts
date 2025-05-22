@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
 import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft/OFTUpgradeable.sol";
@@ -28,7 +28,6 @@ contract wXTM is OFTUpgradeable, EIP3009, AccessControlUpgradeable {
         _grantRole(DEFAULT_ADMIN_ROLE, _delegate);
     }
 
-    /** @dev Mint can only be called by multi-sig-wallets with access control */
     function mint(address _to, uint256 _amount) external onlyRole(MINTER_ROLE) {
         _mint(_to, _amount);
     }
