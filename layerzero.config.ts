@@ -5,6 +5,12 @@ import { OAppEnforcedOption } from '@layerzerolabs/toolbox-hardhat'
 
 import type { OmniPointHardhat } from '@layerzerolabs/toolbox-hardhat'
 
+/** @dev More Contracts Needed To Setup LZ Config */
+const mainnetContract: OmniPointHardhat = {
+    eid: EndpointId.ETHEREUM_MAINNET,
+    contractName: 'wXTM',
+}
+
 const sepoliaContract: OmniPointHardhat = {
     eid: EndpointId.SEPOLIA_V2_TESTNET,
     contractName: 'wXTM',
