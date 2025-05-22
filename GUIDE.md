@@ -26,6 +26,7 @@ Setup info: https://docs.layerzero.network/v2/developers/evm/technical-reference
 
 #### **Export Fresh Deployments**
 
+`npm run export-deployments-mainnet`
 `npm run export-deployments-sepolia`
 `npm run export-deployments-base-sepolia`
 
