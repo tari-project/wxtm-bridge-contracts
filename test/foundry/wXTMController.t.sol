@@ -49,8 +49,13 @@ contract wXTMControllerTest is TestHelperOz5 {
         );
 
         vm.startPrank(admin);
-        controller = new wXTMController();
-        controller.initialize(address(wxtm), lowMinter, highMinter, admin);
+        controller = wXTMController(
+            _deployContractAndProxy(
+                type(wXTMController).creationCode,
+                abi.encode(),
+                abi.encodeWithSelector(wXTMController.initialize.selector, address(wxtm), lowMinter, highMinter, admin)
+            )
+        );
 
         wxtm.grantRole(MINTER_ROLE, address(controller));
         vm.stopPrank();
