@@ -1,9 +1,6 @@
 import { SignerWithAddress } from '@nomiclabs/hardhat-ethers/signers'
-import { expect } from 'chai'
 import { Contract, ContractFactory } from 'ethers'
 import { deployments, ethers } from 'hardhat'
-
-import { Options } from '@layerzerolabs/lz-v2-utilities'
 
 describe('wXTM Test', function () {
     // Constant representing a mock Endpoint ID for testing purposes
@@ -22,9 +19,6 @@ describe('wXTM Test', function () {
 
     // Before hook for setup that runs once before all tests in the block
     before(async function () {
-        // Contract factory for our tested contract
-        //
-        // We are using a derived contract that exposes a mint() function for testing purposes
         wXTM = await ethers.getContractFactory('wXTM')
 
         // Fetching the first three signers (accounts) from Hardhat's local Ethereum network
@@ -43,59 +37,21 @@ describe('wXTM Test', function () {
         EndpointV2Mock = new ContractFactory(EndpointV2MockArtifact.abi, EndpointV2MockArtifact.bytecode, endpointOwner)
     })
 
-    // beforeEach hook for setup that runs before each test in the block
     beforeEach(async function () {
         // Deploying a mock LZEndpoint with the given Endpoint ID
         mockEndpointV2A = await EndpointV2Mock.deploy(eidA)
         mockEndpointV2B = await EndpointV2Mock.deploy(eidB)
 
         // Deploying two instances of wXTM contract with different identifiers and linking them to the mock LZEndpoint
-        wXTMA = await wXTM.deploy('aOFT', 'aOFT', mockEndpointV2A.address, ownerA.address)
-        wXTMB = await wXTM.deploy('bOFT', 'bOFT', mockEndpointV2B.address, ownerB.address)
+        wXTMA = await wXTM.deploy(mockEndpointV2A.address)
+        wXTMB = await wXTM.deploy(mockEndpointV2B.address)
 
         // Setting destination endpoints in the LZEndpoint mock for each wXTM instance
         await mockEndpointV2A.setDestLzEndpoint(wXTMB.address, mockEndpointV2B.address)
         await mockEndpointV2B.setDestLzEndpoint(wXTMA.address, mockEndpointV2A.address)
-
-        // Setting each wXTM instance as a peer of the other in the mock LZEndpoint
-        await wXTMA.connect(ownerA).setPeer(eidB, ethers.utils.zeroPad(wXTMB.address, 32))
-        await wXTMB.connect(ownerB).setPeer(eidA, ethers.utils.zeroPad(wXTMA.address, 32))
     })
 
-    // A test case to verify token transfer functionality
-    it('should send a token from A address to B address via each OFT', async function () {
-        // Minting an initial amount of tokens to ownerA's address in the wXTMA contract
-        const initialAmount = ethers.utils.parseEther('100')
-        await wXTMA.mint(ownerA.address, initialAmount)
-
-        // Defining the amount of tokens to send and constructing the parameters for the send operation
-        const tokensToSend = ethers.utils.parseEther('1')
-
-        // Defining extra message execution options for the send operation
-        const options = Options.newOptions().addExecutorLzReceiveOption(200000, 0).toHex().toString()
-
-        const sendParam = [
-            eidB,
-            ethers.utils.zeroPad(ownerB.address, 32),
-            tokensToSend,
-            tokensToSend,
-            options,
-            '0x',
-            '0x',
-        ]
-
-        // Fetching the native fee for the token send operation
-        const [nativeFee] = await wXTMA.quoteSend(sendParam, false)
-
-        // Executing the send operation from wXTMA contract
-        await wXTMA.send(sendParam, [nativeFee, 0], ownerA.address, { value: nativeFee })
-
-        // Fetching the final token balances of ownerA and ownerB
-        const finalBalanceA = await wXTMA.balanceOf(ownerA.address)
-        const finalBalanceB = await wXTMB.balanceOf(ownerB.address)
-
-        // Asserting that the final balances are as expected after the send operation
-        expect(finalBalanceA).eql(initialAmount.sub(tokensToSend))
-        expect(finalBalanceB).eql(tokensToSend)
+    it('test contracts with foundry', async () => {
+        await ethers.getContractFactory('wXTM')
     })
 })

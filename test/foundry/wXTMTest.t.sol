@@ -18,11 +18,13 @@ import { IOFT, SendParam, OFTReceipt } from "@layerzerolabs/oft-evm/contracts/in
 import { MessagingFee, MessagingReceipt } from "@layerzerolabs/oft-evm/contracts/OFTCore.sol";
 import { OFTMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTMsgCodec.sol";
 import { OFTComposeMsgCodec } from "@layerzerolabs/oft-evm/contracts/libs/OFTComposeMsgCodec.sol";
+import { EndpointV2Mock } from "@layerzerolabs/test-devtools-evm-foundry/contracts/mocks/EndpointV2Mock.sol";
 
 // OZ imports
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 // Forge imports
 import "forge-std/console.sol";
@@ -33,6 +35,7 @@ import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contract
 contract wXTMTest is TestHelperOz5 {
     using OptionsBuilder for bytes;
 
+    bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     uint32 private aEid = 1; // 40161 -> Sepolia;
@@ -228,6 +231,34 @@ contract wXTMTest is TestHelperOz5 {
         aOFT.burn(amount);
 
         assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
+    }
+
+    function test_wxtm_implementation_initialization_disabled() public {
+        wXTM wxtm = wXTM(
+            _deployContractAndProxy(
+                type(wXTM).creationCode,
+                abi.encode(address(endpoints[aEid])),
+                abi.encodeWithSelector(wXTM.initialize.selector, "wxtm", "wxtm", "1", address(this))
+            )
+        );
+
+        bytes32 implementationRaw = vm.load(address(wxtm), IMPLEMENTATION_SLOT);
+        address implementationAddress = address(uint160(uint256(implementationRaw)));
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        aOFT.initialize("wxtm", "wxtm", "1", address(this));
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bOFT.initialize("wxtm", "wxtm", "1", address(this));
+
+        wXTM wxtmImplementation = wXTM(implementationAddress);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        wxtmImplementation.initialize("wxtm", "wxtm", "1", address(this));
+
+        EndpointV2Mock endpoint = EndpointV2Mock(address(wxtm.endpoint()));
+        assertEq(endpoint.delegates(address(wxtm)), address(this));
+        assertEq(endpoint.delegates(implementationAddress), address(0));
     }
 
     /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */
