@@ -3,7 +3,9 @@ name: wXTM bridge contracts package publish
 on:
   push:
     tags:
-      - '@tari-project/wxtm-bridge-contracts@v*'
+      - "@tari-project/wxtm-bridge-contracts@v*"
+
+run-name: "${{ github.ref_name }}"
 
 env:
   NODE_VERSION: "18.x"
