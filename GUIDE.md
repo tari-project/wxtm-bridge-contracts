@@ -22,6 +22,7 @@ Setup info: https://docs.layerzero.network/v2/developers/evm/technical-reference
 
 #### **Tests**
 
+`npm run test:hardhat`
 `npm run test:forge` || `forge test`
 
 #### **Export Fresh Deployments**
