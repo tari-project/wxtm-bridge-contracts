@@ -85,6 +85,7 @@
   },
   "overrides": {
     "ethers": "^5.7.2",
-    "hardhat-deploy": "^0.12.1"
+    "hardhat-deploy": "^0.12.1",
+    "form-data": "^4.0.4"
   }
 }
