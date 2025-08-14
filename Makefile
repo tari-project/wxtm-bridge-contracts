@@ -31,13 +31,13 @@ ifeq ($(findstring --network base_sepolia,$(ARGS)),--network base_sepolia)
 endif
 
 call:
-	@forge script scripts/Interactions.s.sol:CallProxy $(NETWORK_ARGS)
+	@forge script scripts/solidity/Interactions.s.sol:CallProxy $(NETWORK_ARGS)
 
 setPeer:
-	@forge script scripts/Interactions.s.sol:SetPeer $(NETWORK_ARGS)
+	@forge script scripts/solidity/Interactions.s.sol:SetPeer $(NETWORK_ARGS)
 
 setMinter:
-	@forge script scripts/Interactions.s.sol:SetMinter $(NETWORK_ARGS)
+	@forge script scripts/solidity/Interactions.s.sol:SetMinter $(NETWORK_ARGS)
 
 bridge:
-	@forge script scripts/Interactions.s.sol:SendTokens $(NETWORK_ARGS)
+	@forge script scripts/solidity/Interactions.s.sol:SendTokens $(NETWORK_ARGS)

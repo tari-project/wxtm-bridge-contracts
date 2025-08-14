@@ -9,9 +9,10 @@ import { IwXTM } from "./interfaces/IwXTM.sol";
 contract wXTMBridge {
     using SafeERC20 for IERC20;
 
+    uint256 private nonce;
     address private immutable wXTM;
 
-    event TokensUnwrapped(address indexed from, string targetTariAddress, uint256 indexed amount);
+    event TokensUnwrapped(address from, string targetTariAddress, uint256 amount, uint256 nonce);
 
     constructor(address _wXTM) {
         wXTM = _wXTM;
@@ -22,7 +23,9 @@ contract wXTMBridge {
 
         IwXTM(wXTM).burn(value);
 
-        emit TokensUnwrapped(msg.sender, targetTariAddress, value);
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
+
+        nonce++;
     }
 
     function bridgeToTariWithAuthorization(
@@ -30,15 +33,27 @@ contract wXTMBridge {
         uint256 value,
         uint256 validAfter,
         uint256 validBefore,
-        bytes32 nonce,
+        bytes32 authNonce,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) external {
-        IwXTM(wXTM).receiveWithAuthorization(msg.sender, address(this), value, validAfter, validBefore, nonce, v, r, s);
+        IwXTM(wXTM).receiveWithAuthorization(
+            msg.sender,
+            address(this),
+            value,
+            validAfter,
+            validBefore,
+            authNonce,
+            v,
+            r,
+            s
+        );
 
         IwXTM(wXTM).burn(value);
 
-        emit TokensUnwrapped(msg.sender, targetTariAddress, value);
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
+
+        nonce++;
     }
 }

@@ -16,7 +16,8 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(1)
+    /** @TODO Change chain after testing */
+    const deployedContracts = getDeployments(11155111)
 
     console.log('wXTM: ', deployedContracts.wXTM)
 
