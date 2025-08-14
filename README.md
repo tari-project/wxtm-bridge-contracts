@@ -385,7 +385,7 @@ This guide explains how to use the `pnpm` commands to estimate gas usage for Lay
    This command profiles the `lzReceive` function for estimating gas usage across multiple runs.
 
    ```json
-   "gas:lzReceive": "forge script scripts/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzReceive(string,address,uint32,address,uint32,address,bytes,uint256,uint256)'"
+   "gas:lzReceive": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzReceive(string,address,uint32,address,uint32,address,bytes,uint256,uint256)'"
    ```
 
 2. **`gas:lzCompose`**
@@ -393,7 +393,7 @@ This guide explains how to use the `pnpm` commands to estimate gas usage for Lay
    This command profiles the `lzCompose` function for estimating gas usage across multiple runs.
 
    ```json
-   "gas:lzCompose": "forge script scripts/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzCompose(string,address,uint32,address,uint32,address,address,bytes,uint256,uint256)'"
+   "gas:lzCompose": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzCompose(string,address,uint32,address,uint32,address,address,bytes,uint256,uint256)'"
    ```
 
 ### Usage Examples
