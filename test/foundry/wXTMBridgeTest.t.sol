@@ -1,17 +1,17 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-// Contract imports
 import { wXTM } from "../../contracts/wXTM.sol";
 import { wXTMBridge } from "../../contracts/wXTMBridge.sol";
 import { wXTMController } from "../../contracts/wXTMController.sol";
 
-// DevTools imports
 import { console } from "forge-std/Test.sol";
 import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contracts/TestHelperOz5.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract wXTMBridgeTest is TestHelperOz5 {
+    event TokensUnwrapped(address from, string targetTariAddress, uint256 amount, uint256 nonce);
+
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     uint32 private aEid = 1;
@@ -67,7 +67,6 @@ contract wXTMBridgeTest is TestHelperOz5 {
 
         bridge = new wXTMBridge(address(wxtm));
 
-        /** @dev Assign MINTER_ROLE */
         vm.prank(multiSig);
         wxtm.grantRole(MINTER_ROLE, address(controller));
 
@@ -76,7 +75,6 @@ contract wXTMBridgeTest is TestHelperOz5 {
         ofts[0] = address(wxtm);
         this.wireOApps(ofts);
 
-        /** @dev Mint some wXTM for user */
         vm.prank(address(controller));
         wxtm.mint(user, 10 ether);
     }
@@ -100,6 +98,8 @@ contract wXTMBridgeTest is TestHelperOz5 {
 
         vm.startPrank(user);
         wxtm.approve(address(bridge), value);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress", value, 0);
         bridge.bridgeToTari("tariExampleAddress", value);
         vm.stopPrank();
 
@@ -118,12 +118,57 @@ contract wXTMBridgeTest is TestHelperOz5 {
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(userSigKey, digest);
 
-        // Simulate user calling the bridge
         vm.prank(user);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress", value, 0);
         bridge.bridgeToTariWithAuthorization("tariExampleAddress", value, validAfter, validBefore, nonce, v, r, s);
 
         assertEq(wxtm.balanceOf(address(bridge)), 0);
         assertEq(wxtm.balanceOf(user), 7 ether);
+    }
+
+    function test_nonce_change() public {
+        uint256 validAfter = block.timestamp;
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = keccak256("unique-nonce");
+        bytes32 secondNonce = keccak256("unique-secondNonce");
+        bytes32 digest;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+
+        vm.startPrank(user);
+        wxtm.approve(address(bridge), 1 ether);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress", 1 ether, 0);
+        bridge.bridgeToTari("tariExampleAddress", 1 ether);
+
+        digest = _getDigest(user, address(bridge), 2 ether, validAfter, validBefore, nonce);
+        (v, r, s) = vm.sign(userSigKey, digest);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress1", 2 ether, 1);
+        bridge.bridgeToTariWithAuthorization("tariExampleAddress1", 2 ether, validAfter, validBefore, nonce, v, r, s);
+
+        wxtm.approve(address(bridge), 3 ether);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress2", 3 ether, 2);
+        bridge.bridgeToTari("tariExampleAddress2", 3 ether);
+
+        digest = _getDigest(user, address(bridge), 0.1 ether, validAfter, validBefore, secondNonce);
+        (v, r, s) = vm.sign(userSigKey, digest);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress1", 0.1 ether, 3);
+        bridge.bridgeToTariWithAuthorization(
+            "tariExampleAddress1",
+            0.1 ether,
+            validAfter,
+            validBefore,
+            secondNonce,
+            v,
+            r,
+            s
+        );
+        vm.stopPrank();
     }
 
     function _getDigest(
