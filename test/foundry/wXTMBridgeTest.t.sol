@@ -65,7 +65,13 @@ contract wXTMBridgeTest is TestHelperOz5 {
             )
         );
 
-        bridge = new wXTMBridge(address(wxtm));
+        bridge = wXTMBridge(
+            _deployContractAndProxy(
+                type(wXTMBridge).creationCode,
+                abi.encode(),
+                abi.encodeWithSelector(wXTMBridge.initialize.selector, address(wxtm))
+            )
+        );
 
         vm.prank(multiSig);
         wxtm.grantRole(MINTER_ROLE, address(controller));
