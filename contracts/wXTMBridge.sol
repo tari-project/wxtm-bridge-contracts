@@ -2,19 +2,24 @@
 pragma solidity ^0.8.22;
 
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
-contract wXTMBridge {
+contract wXTMBridge is Initializable {
     using SafeERC20 for IERC20;
 
     uint256 private nonce;
-    address private immutable wXTM;
+    address private wXTM;
 
     event TokensUnwrapped(address from, string targetTariAddress, uint256 amount, uint256 nonce);
 
-    constructor(address _wXTM) {
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _wXTM) external initializer {
         wXTM = _wXTM;
     }
 
