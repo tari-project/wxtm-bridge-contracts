@@ -82,25 +82,33 @@ contract wXTMBridgeTest is TestHelperOz5 {
         this.wireOApps(ofts);
 
         vm.prank(address(controller));
-        wxtm.mint(user, 10 ether);
+        wxtm.mint(user, 10_000 ether);
     }
 
-    function test_cant_bridge_zero_to_tari() public {
-        uint256 value = 0 ether;
+    function test_cant_bridge_under_required_amount() public {
+        uint256 value = 999 ether;
+        uint256 validAfter = block.timestamp;
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = keccak256("unique-nonce");
+
+        // Generate EIP712 signature
+        bytes32 digest = _getDigest(user, address(bridge), value, validAfter, validBefore, nonce);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userSigKey, digest);
 
         vm.startPrank(user);
         wxtm.approve(address(bridge), value);
 
-        vm.expectRevert(wXTM.ZeroAmount.selector);
+        vm.expectRevert(wXTMBridge.InsufficientBridgeAmount.selector);
         bridge.bridgeToTari("tariExampleAddress", value);
-        vm.stopPrank();
 
-        assertEq(wxtm.balanceOf(address(bridge)), 0);
-        assertEq(wxtm.balanceOf(user), 10 ether);
+        vm.expectRevert(wXTMBridge.InsufficientBridgeAmount.selector);
+        bridge.bridgeToTariWithAuthorization("tariExampleAddress", value, validAfter, validBefore, nonce, v, r, s);
+        vm.stopPrank();
     }
 
     function test_bridge_to_tari() public {
-        uint256 value = 3 ether;
+        uint256 value = 3000 ether;
 
         vm.startPrank(user);
         wxtm.approve(address(bridge), value);
@@ -110,11 +118,11 @@ contract wXTMBridgeTest is TestHelperOz5 {
         vm.stopPrank();
 
         assertEq(wxtm.balanceOf(address(bridge)), 0);
-        assertEq(wxtm.balanceOf(user), 7 ether);
+        assertEq(wxtm.balanceOf(user), 7000 ether);
     }
 
     function test_receive_with_authorization() public {
-        uint256 value = 3 ether;
+        uint256 value = 3000 ether;
         uint256 validAfter = block.timestamp;
         uint256 validBefore = block.timestamp + 1 hours;
         bytes32 nonce = keccak256("unique-nonce");
@@ -130,7 +138,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
         bridge.bridgeToTariWithAuthorization("tariExampleAddress", value, validAfter, validBefore, nonce, v, r, s);
 
         assertEq(wxtm.balanceOf(address(bridge)), 0);
-        assertEq(wxtm.balanceOf(user), 7 ether);
+        assertEq(wxtm.balanceOf(user), 7000 ether);
     }
 
     function test_nonce_change() public {
@@ -144,29 +152,37 @@ contract wXTMBridgeTest is TestHelperOz5 {
         bytes32 s;
 
         vm.startPrank(user);
-        wxtm.approve(address(bridge), 1 ether);
+        wxtm.approve(address(bridge), 4000 ether);
         vm.expectEmit(true, true, true, true, address(bridge));
-        emit TokensUnwrapped(user, "tariExampleAddress", 1 ether, 0);
-        bridge.bridgeToTari("tariExampleAddress", 1 ether);
+        emit TokensUnwrapped(user, "tariExampleAddress", 1000 ether, 0);
+        bridge.bridgeToTari("tariExampleAddress", 1000 ether);
 
-        digest = _getDigest(user, address(bridge), 2 ether, validAfter, validBefore, nonce);
+        digest = _getDigest(user, address(bridge), 2000 ether, validAfter, validBefore, nonce);
         (v, r, s) = vm.sign(userSigKey, digest);
         vm.expectEmit(true, true, true, true, address(bridge));
-        emit TokensUnwrapped(user, "tariExampleAddress1", 2 ether, 1);
-        bridge.bridgeToTariWithAuthorization("tariExampleAddress1", 2 ether, validAfter, validBefore, nonce, v, r, s);
-
-        wxtm.approve(address(bridge), 3 ether);
-        vm.expectEmit(true, true, true, true, address(bridge));
-        emit TokensUnwrapped(user, "tariExampleAddress2", 3 ether, 2);
-        bridge.bridgeToTari("tariExampleAddress2", 3 ether);
-
-        digest = _getDigest(user, address(bridge), 0.1 ether, validAfter, validBefore, secondNonce);
-        (v, r, s) = vm.sign(userSigKey, digest);
-        vm.expectEmit(true, true, true, true, address(bridge));
-        emit TokensUnwrapped(user, "tariExampleAddress1", 0.1 ether, 3);
+        emit TokensUnwrapped(user, "tariExampleAddress1", 2000 ether, 1);
         bridge.bridgeToTariWithAuthorization(
             "tariExampleAddress1",
-            0.1 ether,
+            2000 ether,
+            validAfter,
+            validBefore,
+            nonce,
+            v,
+            r,
+            s
+        );
+
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress2", 3000 ether, 2);
+        bridge.bridgeToTari("tariExampleAddress2", 3000 ether);
+
+        digest = _getDigest(user, address(bridge), 1001.01 ether, validAfter, validBefore, secondNonce);
+        (v, r, s) = vm.sign(userSigKey, digest);
+        vm.expectEmit(true, true, true, true, address(bridge));
+        emit TokensUnwrapped(user, "tariExampleAddress1", 1001.01 ether, 3);
+        bridge.bridgeToTariWithAuthorization(
+            "tariExampleAddress1",
+            1001.01 ether,
             validAfter,
             validBefore,
             secondNonce,
