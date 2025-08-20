@@ -99,10 +99,10 @@ contract wXTMBridgeTest is TestHelperOz5 {
         vm.startPrank(user);
         wxtm.approve(address(bridge), value);
 
-        vm.expectRevert(wXTMBridge.InsufficientBridgeAmount.selector);
+        vm.expectRevert(wXTMBridge.InsufficientAmount.selector);
         bridge.bridgeToTari("tariExampleAddress", value);
 
-        vm.expectRevert(wXTMBridge.InsufficientBridgeAmount.selector);
+        vm.expectRevert(wXTMBridge.InsufficientAmount.selector);
         bridge.bridgeToTariWithAuthorization("tariExampleAddress", value, validAfter, validBefore, nonce, v, r, s);
         vm.stopPrank();
     }

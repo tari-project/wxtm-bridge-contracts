@@ -26,6 +26,7 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
 
+    /** @TODO Remove below before mainnet deployment */
     const salt = ethers.utils.id('wXTMBridge-v0.0.1')
 
     const proxy = await deploy(contractName, {
@@ -43,10 +44,10 @@ const deploy: DeployFunction = async (hre) => {
                     methodName: 'initialize',
                     args: [deployedContracts.wXTM],
                 },
-                onUpgrade: {
-                    methodName: 'initialize',
-                    args: [deployedContracts.wXTM],
-                },
+                // onUpgrade: {
+                //     methodName: 'initialize',
+                //     args: [deployedContracts.wXTM],
+                // },
             },
         },
     })

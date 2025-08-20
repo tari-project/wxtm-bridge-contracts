@@ -41,15 +41,15 @@ const deploy: DeployFunction = async (hre) => {
                         deployer,
                     ],
                 },
-                onUpgrade: {
-                    methodName: 'initialize',
-                    args: [
-                        deployedContracts.wXTM,
-                        '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
-                        '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                        deployer,
-                    ],
-                },
+                // onUpgrade: {
+                //     methodName: 'initialize',
+                //     args: [
+                //         deployedContracts.wXTM,
+                //         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
+                //         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
+                //         deployer,
+                //     ],
+                // },
             },
         },
     })

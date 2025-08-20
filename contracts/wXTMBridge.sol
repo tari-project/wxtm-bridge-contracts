@@ -10,7 +10,7 @@ import { IwXTM } from "./interfaces/IwXTM.sol";
 contract wXTMBridge is Initializable {
     using SafeERC20 for IERC20;
 
-    error InsufficientBridgeAmount();
+    error InsufficientAmount();
 
     uint256 private nonce;
     address private wXTM;
@@ -26,7 +26,7 @@ contract wXTMBridge is Initializable {
     }
 
     function bridgeToTari(string memory targetTariAddress, uint256 value) external {
-        if (value < 1000 ether) revert InsufficientBridgeAmount();
+        if (value < 1000 ether) revert InsufficientAmount();
 
         IERC20(wXTM).safeTransferFrom(msg.sender, address(this), value);
 
@@ -47,7 +47,7 @@ contract wXTMBridge is Initializable {
         bytes32 r,
         bytes32 s
     ) external {
-        if (value < 1000 ether) revert InsufficientBridgeAmount();
+        if (value < 1000 ether) revert InsufficientAmount();
 
         IwXTM(wXTM).receiveWithAuthorization(
             msg.sender,
