@@ -41,17 +41,17 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
     }
 
     /**
-     * @notice Burns wXTM tokens after verification
-     * @dev EOA wallet signatures should be packed in the order of r, s, v.
-     * @param from          Address authorizing the burn (must hold sufficient balance)
-     * @param to            Address that receive original tokens on the Tari blockchain
-     * @param value         Amount of wXTM tokens to burn
+     * @notice Transfers wXTM from authorizer to recipient with authorization
+     * @dev EOA wallet signatures should be packed in the order of r, s, v
+     * @param from          Payer's address (Authorizer)
+     * @param to            Payee's address
+     * @param value         Amount of wXTM tokens to be transferred
      * @param validAfter    Timestamp after which the authorization is valid
      * @param validBefore   Timestamp (unix time) before which the authorization expires
      * @param nonce         Unique identifier to prevent replay attacks
-     * @param v             Signature component.
-     * @param r             Signature component.
-     * @param s             Signature component.
+     * @param v             Signature component
+     * @param r             Signature component
+     * @param s             Signature component
      */
     function _transferWithAuthorization(
         address from,
@@ -79,19 +79,19 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
     }
 
     /**
-     * @notice Mints wXTM tokens after verification
+     * @notice Receive a wXTM transfer with a signed authorization from the payer
      * @dev This has an additional check to ensure that the payee's address
-     * matches the caller of this function to prevent front-running attacks.
-     * EOA wallet signatures should be packed in the order of r, s, v.
-     * @param from          Address authorizing the mint (original token owner on Tari blockchain)
-     * @param to            Address receiving the minted tokens
-     * @param value         Amount of wXTM tokens to mint
+     * matches the caller of this function to prevent front-running attacks
+     * EOA wallet signatures should be packed in the order of r, s, v
+     * @param from          Payer's address (Authorizer)
+     * @param to            Payee's address
+     * @param value         Amount of wXTM tokens to be transferred
      * @param validAfter    Timestamp after which the authorization is valid
      * @param validBefore   Timestamp (unix time) before which the authorization expires
      * @param nonce         Unique identifier to prevent replay attacks
-     * @param v             Signature component.
-     * @param r             Signature component.
-     * @param s             Signature component.
+     * @param v             Signature component
+     * @param r             Signature component
+     * @param s             Signature component
      */
     function _receiveWithAuthorization(
         address from,
@@ -104,7 +104,7 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
         bytes32 r,
         bytes32 s
     ) internal {
-        /** @dev Prevent front-running: only 'to' address can execute this */
+        /** @dev Prevents front-running: only 'to' address can execute this */
         if (msg.sender != to) revert EIP3009_UnauthorizedCaller();
 
         _transferWithAuthorization(
@@ -157,7 +157,7 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
         if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
         if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
 
-        /** @dev Prevent reentrancy attack */
+        /** @dev Prevents reentrancy attack */
         _authorizationStates[from][nonce] = true;
 
         _requireValidSignature(
