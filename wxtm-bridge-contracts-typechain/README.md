@@ -1,9 +1,25 @@
-# Utility pack for wxtm-bridge-contracts
+### To update package
 
-```bash
-# Install from the command line:
-npm install @tari-project/wxtm-bridge-contracts@0.1.7
+1. **Change directory**
 
-# Install via package.json:
-"@tari-project/wxtm-bridge-contracts": "0.1.7"
-```
+   ```sh
+    cd wxtm-bridge-contracts-typechain
+   ```
+
+2. **Change version of the package**
+
+   ```sh
+    npm version patch # or minor/major
+   ```
+
+3. **Make a matching tag**
+
+   ```sh
+    git tag "@tari-project/wxtm-bridge-contracts@v0.1.10"
+   ```
+
+4. **Push to github with tags**
+
+   ```sh
+    git push origin "@tari-project/wxtm-bridge-contracts@v0.1.10"
+   ```

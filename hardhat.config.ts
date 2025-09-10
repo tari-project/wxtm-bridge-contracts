@@ -53,16 +53,16 @@ const config: HardhatUserConfig = {
         ],
     },
     networks: {
-        // mainnet: {
-        //     eid: EndpointId.ETHEREUM_MAINNET,
-        //     url: process.env.MAINNET_RPC_URL || '',
-        //     kmsKeyId: process.env.KMS_KEY_ID,
-        // },
-        'sepolia-testnet': {
-            eid: EndpointId.SEPOLIA_V2_TESTNET,
-            url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
+        mainnet: {
+            eid: EndpointId.ETHEREUM_MAINNET,
+            url: process.env.MAINNET_RPC_URL || '',
             kmsKeyId: process.env.KMS_KEY_ID,
         },
+        // 'sepolia-testnet': {
+        //     eid: EndpointId.SEPOLIA_V2_TESTNET,
+        //     url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
+        //     kmsKeyId: process.env.KMS_KEY_ID,
+        // },
         // 'base-sepolia-testnet': {
         //     eid: EndpointId.BASESEP_V2_TESTNET,
         //     url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',

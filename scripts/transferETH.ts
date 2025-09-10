@@ -6,7 +6,7 @@ transferETH().catch((error) => {
 })
 
 async function transferETH() {
-    const recipient = '0x07d5D1c02c858e05E66fccC0f5856dddF14c4205'
+    const recipient = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
     const amountETH = '0.03'
 
     const [deployer] = await ethers.getSigners()
