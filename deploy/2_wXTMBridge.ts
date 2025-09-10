@@ -17,8 +17,7 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    /** @TODO Change chain after testing */
-    const deployedContracts = getDeployments(11155111)
+    const deployedContracts = getDeployments(1)
 
     assert(deployer, 'Missing named deployer account')
 
@@ -26,7 +25,6 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
 
-    /** @TODO Remove below before mainnet deployment */
     const salt = ethers.utils.id('wXTMBridge-v0.0.1')
 
     const proxy = await deploy(contractName, {
