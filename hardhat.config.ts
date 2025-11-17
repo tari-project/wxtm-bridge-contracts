@@ -9,7 +9,7 @@ import '@typechain/hardhat'
 import '@openzeppelin/hardhat-upgrades'
 import '@nomicfoundation/hardhat-verify'
 import '@rumblefishdev/hardhat-kms-signer'
-import { HardhatUserConfig /* HttpNetworkAccountsUserConfig */ } from 'hardhat/types'
+import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
@@ -18,22 +18,22 @@ import { EndpointId } from '@layerzerolabs/lz-definitions'
 // //
 // // If you prefer using a mnemonic, set a MNEMONIC environment variable
 // // to a valid mnemonic
-// const MNEMONIC = process.env.MNEMONIC
+const MNEMONIC = process.env.MNEMONIC
 
-// // If you prefer to be authenticated using a private key, set a PRIVATE_KEY environment variable
-// const PRIVATE_KEY = process.env.PRIVATE_KEY
+// If you prefer to be authenticated using a private key, set a PRIVATE_KEY environment variable
+const PRIVATE_KEY = process.env.PRIVATE_KEY
 
-// const accounts: HttpNetworkAccountsUserConfig | undefined = MNEMONIC
-//     ? { mnemonic: MNEMONIC }
-//     : PRIVATE_KEY
-//       ? [PRIVATE_KEY]
-//       : undefined
+const accounts: HttpNetworkAccountsUserConfig | undefined = MNEMONIC
+    ? { mnemonic: MNEMONIC }
+    : PRIVATE_KEY
+      ? [PRIVATE_KEY]
+      : undefined
 
-// if (accounts == null) {
-//     console.warn(
-//         'Could not find MNEMONIC or PRIVATE_KEY environment variables. It will not be possible to execute transactions in your example.'
-//     )
-// }
+if (accounts == null) {
+    console.warn(
+        'Could not find MNEMONIC or PRIVATE_KEY environment variables. It will not be possible to execute transactions in your example.'
+    )
+}
 
 const config: HardhatUserConfig = {
     paths: {
@@ -53,6 +53,7 @@ const config: HardhatUserConfig = {
         ],
     },
     networks: {
+        /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
         mainnet: {
             eid: EndpointId.ETHEREUM_MAINNET,
             url: process.env.MAINNET_RPC_URL || '',
