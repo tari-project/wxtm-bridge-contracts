@@ -21,6 +21,12 @@ import { EndpointId } from '@layerzerolabs/lz-definitions'
 const MNEMONIC = process.env.MNEMONIC
 
 // If you prefer to be authenticated using a private key, set a PRIVATE_KEY environment variable
+
+//-------------------------------------------------------------------------------------//
+//                                                                                     //
+/** @CAUTION Use below PRIVATE_KEY in .env ONLY for development wallets if possible!!! */
+//                                                                                     //
+//-------------------------------------------------------------------------------------//
 const PRIVATE_KEY = process.env.PRIVATE_KEY
 
 const accounts: HttpNetworkAccountsUserConfig | undefined = MNEMONIC
