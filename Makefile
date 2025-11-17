@@ -41,3 +41,10 @@ setMinter:
 
 bridge:
 	@forge script scripts/solidity/Interactions.s.sol:SendTokens $(NETWORK_ARGS)
+
+bridgeWithAuth:
+	@forge script scripts/solidity/Interactions.s.sol:ExecWithAuth $(NETWORK_ARGS)
+
+# Simulation-only targets (no broadcast, no verify)
+simulateBridgeWithAuth:
+	@forge script scripts/solidity/Interactions.s.sol:ExecWithAuth --rpc-url $(MAINNET_RPC_URL) -vvvv

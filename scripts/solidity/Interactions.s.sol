@@ -20,8 +20,35 @@ interface IwXTM {
     ) external view returns (uint256 nativeFee, uint256 lzTokenFee);
     function send(SendParam calldata _sendParam, MessagingFee calldata _fee, address _refundAddress) external payable;
     function grantRole(bytes32 role, address account) external;
+    function RECEIVE_WITH_AUTHORIZATION_TYPEHASH() external view returns (bytes32);
+    function eip712Domain()
+        external
+        view
+        returns (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        );
 }
 
+interface IwXTMBridge {
+    function bridgeToTariWithAuthorization(
+        string memory targetTariAddress,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 authNonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+}
+
+/** @dev Grants minter roles to specified addresses */
 contract SetMinter is Script {
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 private constant LOW_MINTER_ROLE = keccak256("LOW_MINTER_ROLE");
@@ -42,6 +69,7 @@ contract SetMinter is Script {
     }
 }
 
+/** @dev General-purpose script for wXTM proxy interactions (check owner, burn tokens, transfer ownership, etc.) */
 contract CallProxy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
@@ -62,6 +90,7 @@ contract CallProxy is Script {
     }
 }
 
+/** @dev Sets peer addresses for LayerZero OFT cross-chain communication */
 contract SetPeer is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
@@ -80,6 +109,7 @@ contract SetPeer is Script {
     }
 }
 
+/** @dev Allows sending tokens between two blockchains using OFT tech */
 contract SendTokens is Script {
     using OptionsBuilder for bytes;
 
@@ -114,5 +144,73 @@ contract SendTokens is Script {
         proxy.send{ value: nativeFee }(sendParam, fee, payable(msg.sender));
 
         vm.stopBroadcast();
+    }
+}
+
+/** @dev Bridges wXTM tokens to Tari using EIP-3009 authorization (calls `bridgeToTariWithAuthorization`) */
+contract ExecWithAuth is Script {
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+
+        // address wXTMAddress = 0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374; // Sepolia wXTM
+        // address bridgeAddress = 0x4F31d7FC63FdBcfC119F9A0C0549150B00C356e8; // Sepolia wXTMBridge
+
+        address wXTMAddress = 0xfD36fA88bb3feA8D1264fc89d70723b6a2B56958; // Mainnet wXTM
+        address bridgeAddress = 0x810be828EFA687667B289C488A57a7B48Fb4523E; // Mainnet wXTMBridge
+
+        IwXTM wxtm = IwXTM(wXTMAddress);
+        IwXTMBridge bridge = IwXTMBridge(bridgeAddress);
+
+        // Authorization parameters
+        string memory targetTariAddress = "SomeTariAddress";
+        uint256 value = 1000 ether; // Minimum 1000 wXTM required
+        uint256 validAfter = block.timestamp;
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 authNonce = keccak256(abi.encodePacked(block.timestamp, deployerKey));
+
+        bytes32 digest;
+        {
+            // Build EIP-712 digest
+            bytes32 structHash = keccak256(
+                abi.encode(
+                    wxtm.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(),
+                    vm.addr(deployerKey), // from
+                    bridgeAddress, // to
+                    value,
+                    validAfter,
+                    validBefore,
+                    authNonce
+                )
+            );
+
+            // Get domain separator from wXTM contract
+            (, string memory name, string memory version, uint256 chainId, address verifyingContract, , ) = wxtm
+                .eip712Domain();
+            bytes32 domainSeparator = keccak256(
+                abi.encode(
+                    keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                    keccak256(bytes(name)),
+                    keccak256(bytes(version)),
+                    chainId,
+                    verifyingContract
+                )
+            );
+
+            digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        }
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(deployerKey, digest);
+
+        console.log("Bridging wXTM to Tari address: ", value, targetTariAddress);
+        console.log("Valid after: ", validAfter);
+        console.log("Valid before: ", validBefore);
+
+        vm.startBroadcast(deployerKey);
+
+        bridge.bridgeToTariWithAuthorization(targetTariAddress, value, validAfter, validBefore, authNonce, v, r, s);
+
+        vm.stopBroadcast();
+
+        console.log("Bridge transaction completed successfully");
     }
 }
