@@ -40,17 +40,35 @@ const config: HardhatUserConfig = {
         cache: 'cache/hardhat',
     },
     solidity: {
-        compilers: [
-            {
-                version: '0.8.22',
-                settings: {
-                    optimizer: {
-                        enabled: true,
-                        runs: 200,
-                    },
-                },
-            },
-        ],
+      compilers: [
+      {
+        version: "0.8.10",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200, // Important: Match this with Etherscan!
+          },
+        },
+      },
+      {
+        version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+      {
+        version: "0.8.22",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+    ],
     },
     networks: {
         /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
