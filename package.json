@@ -40,6 +40,10 @@
         "@layerzerolabs/toolbox-hardhat": "^0.6.13",
         "@openzeppelin/contracts": "^5.4.0",
         "@openzeppelin/contracts-upgradeable": "^5.4.0",
+        "@rocketh/deploy": "^0.17.6",
+        "@rocketh/node": "^0.17.9",
+        "@rocketh/read-execute": "^0.17.5",
+        "@rumblefishdev/hardhat-kms-signer": "^2.0.0",
         "@rushstack/eslint-patch": "^1.7.0",
         "@types/chai": "^5.2.3",
         "@types/mocha": "^10.0.6",
@@ -53,10 +57,14 @@
         "eslint-plugin-prettier": "^5.5.4",
         "ethers": "^6.16.0",
         "hardhat": "^3.1.2",
+        "hardhat-contract-sizer": "^2.10.1",
+        "hardhat-deploy": "2.0.0-next.57",
+        "hardhat-typechain": "^0.3.5",
         "install": "^0.13.0",
         "mocha": "^11.7.5",
         "npm": "^11.7.0",
         "prettier": "^3.2.5",
+        "rocketh": "^0.17.9",
         "solhint": "^6.0.2",
         "solidity-bytes-utils": "^0.8.2",
         "ts-node": "^10.9.2",
@@ -70,9 +78,6 @@
             "ws": "^5.2.4",
             "axios": "^0.30.2",
             "qs": "^6.14.1"
-        },
-        "configDependencies": {
-            "@pnpm/plugin-types-fixer": "0.1.0+sha512-bLww63gRHi7siYTqFJb5qNdcXadU0jv20Et6z5AryMZ7FlLolbEJOrXLpg8+amQZNHHNW1dfFUBGVw/9ezQbFg=="
         }
     },
     "overrides": {

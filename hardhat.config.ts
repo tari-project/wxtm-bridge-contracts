@@ -3,10 +3,8 @@ import '@layerzerolabs/toolbox-hardhat'
 import 'hardhat-contract-sizer'
 
 import 'hardhat-contract-sizer'
-import '@typechain/hardhat'
+import 'hardhat-typechain'
 
-import '@openzeppelin/hardhat-upgrades'
-import '@nomicfoundation/hardhat-verify'
 import '@rumblefishdev/hardhat-kms-signer'
 
 import type { HttpNetworkAccountsUserConfig } from 'hardhat/types/config'
