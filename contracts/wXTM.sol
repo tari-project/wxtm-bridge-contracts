@@ -5,7 +5,7 @@ import { OFTUpgradeable } from "@layerzerolabs/oft-evm-upgradeable/contracts/oft
 import { EIP3009 } from "./extensions/EIP3009.sol";
 import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-contract wXTM is OFTUpgradeable, EIP3009, AccessControlUpgradeable {
+contract WXTM is OFTUpgradeable, EIP3009, AccessControlUpgradeable {
     error ZeroAmount();
 
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");

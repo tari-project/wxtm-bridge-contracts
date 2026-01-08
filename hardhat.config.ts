@@ -1,7 +1,10 @@
-import { defineConfig } from 'hardhat/config'
+import { defineConfig, HardhatUserConfig } from 'hardhat/config'
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
 export default defineConfig({
+    typechain: {
+        outDir: 'typechain',
+    },
     paths: {
         cache: 'cache/hardhat',
     },
@@ -28,9 +31,7 @@ export default defineConfig({
             // kmsKeyId: process.env.KMS_KEY_ID,
         },
     },
-    typechain: {
-        outDir: 'typechain',
-    },
+
     etherscan: {
         apiKey: process.env.ETHERSCAN_API_KEY,
     },
@@ -43,4 +44,4 @@ export default defineConfig({
             default: 0, // wallet address of index[0], of the mnemonic in .env
         },
     },
-})
+} as HardhatUserConfig)

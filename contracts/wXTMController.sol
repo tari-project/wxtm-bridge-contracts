@@ -5,7 +5,7 @@ import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/ac
 
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
-contract wXTMController is AccessControlUpgradeable {
+contract WXTMController is AccessControlUpgradeable {
     error UnauthorizedToMintThisAmount();
 
     uint256 private constant HIGH_MINT_THRESHOLD = 100_000 ether;

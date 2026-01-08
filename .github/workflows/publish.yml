@@ -1,56 +1,56 @@
 name: wXTM bridge contracts package publish
 
 on:
-  push:
-    tags:
-      - "@tari-project/wxtm-bridge-contracts@v*"
-  workflow_dispatch:
+    push:
+        tags:
+            - '@tari-project/wxtm-bridge-contracts@v*'
+    workflow_dispatch:
 
-run-name: "${{ github.ref_name }}"
+run-name: '${{ github.ref_name }}'
 
 env:
-  NODE_VERSION: "24.x"
-  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  DEPLOYER: "0000000000000000000000000000000000000000000000000000000000000000"
+    NODE_VERSION: '24.x'
+    NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    DEPLOYER: '0000000000000000000000000000000000000000000000000000000000000000'
 
 jobs:
-  publish:
-    permissions:
-      packages: write
-      contents: read
+    publish:
+        permissions:
+            packages: write
+            contents: read
 
-    runs-on: ubuntu-latest
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v6
+        runs-on: ubuntu-latest
+        steps:
+            - name: 'Checkout'
+              uses: actions/checkout@v6
 
-      - name: Cache NPM dependencies
-        uses: actions/cache@v5
-        with:
-          path: node_modules
-          key: ${{ runner.OS }}-npm-cache-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.OS }}-npm-cache-
+            - name: Cache NPM dependencies
+              uses: actions/cache@v5
+              with:
+                  path: node_modules
+                  key: ${{ runner.OS }}-npm-cache-${{ hashFiles('**/package-lock.json') }}
+                  restore-keys: |
+                      ${{ runner.OS }}-npm-cache-
 
-      - name: "Setup Node ${{ env.NODE_VERSION }}"
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: https://registry.npmjs.org/
-          scope: "@tari-project"
-          cache: npm
+            - name: 'Setup Node ${{ env.NODE_VERSION }}'
+              uses: actions/setup-node@v6
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  registry-url: https://registry.npmjs.org/
+                  scope: '@tari-project'
+                  cache: npm
 
-      - name: Install npm dependencies
-        run: |
-          npm ci
+            - name: Install npm dependencies
+              run: |
+                  npm ci
 
-      - name: "Build contracts"
-        run: npm run compile:hardhat
+            - name: 'Build contracts'
+              run: npm run compile:hardhat
 
-      - name: "Build package"
-        run: npm run build
-        working-directory: "./wxtm-bridge-contracts-typechain"
+            - name: 'Build package'
+              run: npm run build
+              working-directory: './wxtm-bridge-contracts-typechain'
 
-      - name: "Publish package"
-        run: npm publish
-        working-directory: "./wxtm-bridge-contracts-typechain"
+            - name: 'Publish package'
+              run: npm publish
+              working-directory: './wxtm-bridge-contracts-typechain'

@@ -7,7 +7,7 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
-contract wXTMBridge is Initializable {
+contract WXTMBridge is Initializable {
     using SafeERC20 for IERC20;
 
     error InsufficientAmount();

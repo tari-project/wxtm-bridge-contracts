@@ -382,19 +382,19 @@ This guide explains how to use the `pnpm` commands to estimate gas usage for Lay
 
 1. **`gas:lzReceive`**
 
-   This command profiles the `lzReceive` function for estimating gas usage across multiple runs.
+    This command profiles the `lzReceive` function for estimating gas usage across multiple runs.
 
-   ```json
-   "gas:lzReceive": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzReceive(string,address,uint32,address,uint32,address,bytes,uint256,uint256)'"
-   ```
+    ```json
+    "gas:lzReceive": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzReceive(string,address,uint32,address,uint32,address,bytes,uint256,uint256)'"
+    ```
 
 2. **`gas:lzCompose`**
 
-   This command profiles the `lzCompose` function for estimating gas usage across multiple runs.
+    This command profiles the `lzCompose` function for estimating gas usage across multiple runs.
 
-   ```json
-   "gas:lzCompose": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzCompose(string,address,uint32,address,uint32,address,address,bytes,uint256,uint256)'"
-   ```
+    ```json
+    "gas:lzCompose": "forge script scripts/solidity/GasProfiler.s.sol:GasProfilerScript --via-ir --sig 'run_lzCompose(string,address,uint32,address,uint32,address,address,bytes,uint256,uint256)'"
+    ```
 
 ### Usage Examples
 
@@ -488,13 +488,13 @@ npx hardhat lz:oapp:config:init --contract-name [YOUR_CONTRACT_NAME] --oapp-conf
 
 ```typescript
 const optimismContract: OmniPointHardhat = {
-  eid: EndpointId.OPTSEP_V2_TESTNET,
-  contractName: "MyOFTAdapter",
+    eid: EndpointId.OPTSEP_V2_TESTNET,
+    contractName: 'MyOFTAdapter',
 };
 
 const avalancheContract: OmniPointHardhat = {
-  eid: EndpointId.AVALANCHE_V2_TESTNET,
-  contractName: "MyOFT",
+    eid: EndpointId.AVALANCHE_V2_TESTNET,
+    contractName: 'MyOFT',
 };
 ```
 
@@ -516,16 +516,16 @@ Define the pathway you want to create from and to each contract:
 
 ```typescript
 connections: [
-  // ETH <--> ARB PATHWAY: START
-  {
-    from: ethereumContract,
-    to: arbitrumContract,
-  },
-  {
-    from: arbitrumContract,
-    to: ethereumContract,
-  },
-  // ETH <--> ARB PATHWAY: END
+    // ETH <--> ARB PATHWAY: START
+    {
+        from: ethereumContract,
+        to: arbitrumContract,
+    },
+    {
+        from: arbitrumContract,
+        to: ethereumContract,
+    },
+    // ETH <--> ARB PATHWAY: END
 ];
 ```
 
@@ -533,98 +533,98 @@ Finally, define the config settings for each direction of the pathway:
 
 ```typescript
 connections: [
-  // ETH <--> ARB PATHWAY: START
-  {
-    from: ethereumContract,
-    to: arbitrumContract,
-    config: {
-      sendLibrary: contractsConfig.ethereum.sendLib302,
-      receiveLibraryConfig: {
-        receiveLibrary: contractsConfig.ethereum.receiveLib302,
-        gracePeriod: BigInt(0),
-      },
-      // Optional Receive Library Timeout for when the Old Receive Library Address will no longer be valid
-      receiveLibraryTimeoutConfig: {
-        lib: "0x0000000000000000000000000000000000000000",
-        expiry: BigInt(0),
-      },
-      // Optional Send Configuration
-      // @dev Controls how the `from` chain sends messages to the `to` chain.
-      sendConfig: {
-        executorConfig: {
-          maxMessageSize: 10000,
-          // The configured Executor address
-          executor: contractsConfig.ethereum.executor,
+    // ETH <--> ARB PATHWAY: START
+    {
+        from: ethereumContract,
+        to: arbitrumContract,
+        config: {
+            sendLibrary: contractsConfig.ethereum.sendLib302,
+            receiveLibraryConfig: {
+                receiveLibrary: contractsConfig.ethereum.receiveLib302,
+                gracePeriod: BigInt(0),
+            },
+            // Optional Receive Library Timeout for when the Old Receive Library Address will no longer be valid
+            receiveLibraryTimeoutConfig: {
+                lib: '0x0000000000000000000000000000000000000000',
+                expiry: BigInt(0),
+            },
+            // Optional Send Configuration
+            // @dev Controls how the `from` chain sends messages to the `to` chain.
+            sendConfig: {
+                executorConfig: {
+                    maxMessageSize: 10000,
+                    // The configured Executor address
+                    executor: contractsConfig.ethereum.executor,
+                },
+                ulnConfig: {
+                    // The number of block confirmations to wait on BSC before emitting the message from the source chain.
+                    confirmations: BigInt(15),
+                    // The address of the DVNs you will pay to verify a sent message on the source chain ).
+                    // The destination tx will wait until ALL `requiredDVNs` verify the message.
+                    requiredDVNs: [
+                        contractsConfig.ethereum.horizenDVN, // Horizen
+                        contractsConfig.ethereum.polyhedraDVN, // Polyhedra
+                        contractsConfig.ethereum.animocaBlockdaemonDVN, // Animoca-Blockdaemon (only available on ETH <-> Arbitrum One)
+                        contractsConfig.ethereum.lzDVN, // LayerZero Labs
+                    ],
+                    // The address of the DVNs you will pay to verify a sent message on the source chain ).
+                    // The destination tx will wait until the configured threshold of `optionalDVNs` verify a message.
+                    optionalDVNs: [],
+                    // The number of `optionalDVNs` that need to successfully verify the message for it to be considered Verified.
+                    optionalDVNThreshold: 0,
+                },
+            },
+            // Optional Receive Configuration
+            // @dev Controls how the `from` chain receives messages from the `to` chain.
+            receiveConfig: {
+                ulnConfig: {
+                    // The number of block confirmations to expect from the `to` chain.
+                    confirmations: BigInt(20),
+                    // The address of the DVNs your `receiveConfig` expects to receive verifications from on the `from` chain ).
+                    // The `from` chain's OApp will wait until the configured threshold of `requiredDVNs` verify the message.
+                    requiredDVNs: [
+                        contractsConfig.ethereum.lzDVN, // LayerZero Labs DVN
+                        contractsConfig.ethereum.animocaBlockdaemonDVN, // Blockdaemon-Animoca
+                        contractsConfig.ethereum.horizenDVN, // Horizen Labs
+                        contractsConfig.ethereum.polyhedraDVN, // Polyhedra
+                    ],
+                    // The address of the `optionalDVNs` you expect to receive verifications from on the `from` chain ).
+                    // The destination tx will wait until the configured threshold of `optionalDVNs` verify the message.
+                    optionalDVNs: [],
+                    // The number of `optionalDVNs` that need to successfully verify the message for it to be considered Verified.
+                    optionalDVNThreshold: 0,
+                },
+            },
+            // Optional Enforced Options Configuration
+            // @dev Controls how much gas to use on the `to` chain, which the user pays for on the source `from` chain.
+            enforcedOptions: [
+                {
+                    msgType: 1,
+                    optionType: ExecutorOptionType.LZ_RECEIVE,
+                    gas: 65000,
+                    value: 0,
+                },
+                {
+                    msgType: 2,
+                    optionType: ExecutorOptionType.LZ_RECEIVE,
+                    gas: 65000,
+                    value: 0,
+                },
+                {
+                    msgType: 2,
+                    optionType: ExecutorOptionType.COMPOSE,
+                    index: 0,
+                    gas: 50000,
+                    value: 0,
+                },
+            ],
         },
-        ulnConfig: {
-          // The number of block confirmations to wait on BSC before emitting the message from the source chain.
-          confirmations: BigInt(15),
-          // The address of the DVNs you will pay to verify a sent message on the source chain ).
-          // The destination tx will wait until ALL `requiredDVNs` verify the message.
-          requiredDVNs: [
-            contractsConfig.ethereum.horizenDVN, // Horizen
-            contractsConfig.ethereum.polyhedraDVN, // Polyhedra
-            contractsConfig.ethereum.animocaBlockdaemonDVN, // Animoca-Blockdaemon (only available on ETH <-> Arbitrum One)
-            contractsConfig.ethereum.lzDVN, // LayerZero Labs
-          ],
-          // The address of the DVNs you will pay to verify a sent message on the source chain ).
-          // The destination tx will wait until the configured threshold of `optionalDVNs` verify a message.
-          optionalDVNs: [],
-          // The number of `optionalDVNs` that need to successfully verify the message for it to be considered Verified.
-          optionalDVNThreshold: 0,
-        },
-      },
-      // Optional Receive Configuration
-      // @dev Controls how the `from` chain receives messages from the `to` chain.
-      receiveConfig: {
-        ulnConfig: {
-          // The number of block confirmations to expect from the `to` chain.
-          confirmations: BigInt(20),
-          // The address of the DVNs your `receiveConfig` expects to receive verifications from on the `from` chain ).
-          // The `from` chain's OApp will wait until the configured threshold of `requiredDVNs` verify the message.
-          requiredDVNs: [
-            contractsConfig.ethereum.lzDVN, // LayerZero Labs DVN
-            contractsConfig.ethereum.animocaBlockdaemonDVN, // Blockdaemon-Animoca
-            contractsConfig.ethereum.horizenDVN, // Horizen Labs
-            contractsConfig.ethereum.polyhedraDVN, // Polyhedra
-          ],
-          // The address of the `optionalDVNs` you expect to receive verifications from on the `from` chain ).
-          // The destination tx will wait until the configured threshold of `optionalDVNs` verify the message.
-          optionalDVNs: [],
-          // The number of `optionalDVNs` that need to successfully verify the message for it to be considered Verified.
-          optionalDVNThreshold: 0,
-        },
-      },
-      // Optional Enforced Options Configuration
-      // @dev Controls how much gas to use on the `to` chain, which the user pays for on the source `from` chain.
-      enforcedOptions: [
-        {
-          msgType: 1,
-          optionType: ExecutorOptionType.LZ_RECEIVE,
-          gas: 65000,
-          value: 0,
-        },
-        {
-          msgType: 2,
-          optionType: ExecutorOptionType.LZ_RECEIVE,
-          gas: 65000,
-          value: 0,
-        },
-        {
-          msgType: 2,
-          optionType: ExecutorOptionType.COMPOSE,
-          index: 0,
-          gas: 50000,
-          value: 0,
-        },
-      ],
     },
-  },
-  {
-    from: arbitrumContract,
-    to: ethereumContract,
-  },
-  // ETH <--> ARB PATHWAY: END
+    {
+        from: arbitrumContract,
+        to: ethereumContract,
+    },
+    // ETH <--> ARB PATHWAY: END
 ];
 ```
 

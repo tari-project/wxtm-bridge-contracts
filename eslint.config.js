@@ -9,6 +9,7 @@ export default defineConfig([
     prettierPluginConfig,
     globalIgnores([
         '**/artifacts',
+        '**/typechain',
         '**/cache',
         '**/dist',
         '**/node_modules',
