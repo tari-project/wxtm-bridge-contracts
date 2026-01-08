@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 interface IwXTMController {
     function LOW_MINTER_ROLE() external view returns (bytes32);
