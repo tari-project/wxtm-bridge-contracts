@@ -2,7 +2,6 @@ import { EndpointId } from '@layerzerolabs/lz-definitions'
 import { ExecutorOptionType } from '@layerzerolabs/lz-v2-utilities'
 import { TwoWayConfig, generateConnectionsConfig } from '@layerzerolabs/metadata-tools'
 import { OAppEnforcedOption } from '@layerzerolabs/toolbox-hardhat'
-
 import type { OmniPointHardhat } from '@layerzerolabs/toolbox-hardhat'
 
 /** @dev More Contracts Needed To Setup LZ Config */
