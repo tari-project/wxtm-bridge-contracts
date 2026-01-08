@@ -1,4 +1,4 @@
-import { type DeployFunction } from 'hardhat-deploy/types'
+import { type DeployFunction } from '@rocketh/deploy'
 
 import assert from 'assert'
 import verify from '../utils/verify'

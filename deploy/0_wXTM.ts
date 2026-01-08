@@ -1,8 +1,8 @@
-import { type DeployFunction } from 'hardhat-deploy/types'
+import { type DeployFunction } from '@rocketh/deploy'
 
 import assert from 'assert'
-import verify from '../utils/verify'
-import { ethers } from 'hardhat'
+import verify from '../utils/verify.js'
+import { ethers } from 'ethers'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 

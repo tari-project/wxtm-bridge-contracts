@@ -31,6 +31,9 @@ importers:
       '@layerzerolabs/lz-evm-messagelib-v2':
         specifier: ^3.0.152
         version: 3.0.152(32ebcb3472c4291ed3e1cac34740f296)
+      '@layerzerolabs/lz-evm-sdk-v2':
+        specifier: ^3.0.152
+        version: 3.0.152(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@layerzerolabs/lz-evm-v1-0.7':
         specifier: ^3.0.152
         version: 3.0.152(@openzeppelin/contracts-upgradeable@5.4.0(@openzeppelin/contracts@5.4.0))(@openzeppelin/contracts@5.4.0)(hardhat-deploy@2.0.0-next.57(@rocketh/node@0.17.9(bufferutil@4.1.0)(rocketh@0.17.9(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76))(hardhat@3.1.2(bufferutil@4.1.0)(utf-8-validate@5.0.10)))

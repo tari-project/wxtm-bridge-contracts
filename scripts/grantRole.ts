@@ -1,4 +1,4 @@
-import { ethers } from 'hardhat'
+import { ethers } from 'ethers'
 
 async function grantRole() {
     const contractAddress = '0xfD36fA88bb3feA8D1264fc89d70723b6a2B56958'

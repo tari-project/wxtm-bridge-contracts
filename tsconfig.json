@@ -3,8 +3,8 @@
     "include": ["deploy", "utils", "tasks", "test", "scripts", "hardhat.config.ts"],
     "compilerOptions": {
         "target": "ESNext",
-        "module": "NodeNext",
-        "moduleResolution": "nodenext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
         "esModuleInterop": true,
         "forceConsistentCasingInFileNames": true,
         "strict": true,

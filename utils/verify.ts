@@ -1,4 +1,4 @@
-import type { HardhatRuntimeEnvironment } from 'hardhat/types'
+import type { HardhatRuntimeEnvironment } from 'hardhat/types/hre'
 
 const verify = async (hre: HardhatRuntimeEnvironment, contractAddress: string, args: any[]) => {
     console.log('Verifying contract...')
