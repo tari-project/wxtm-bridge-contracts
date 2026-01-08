@@ -1,8 +1,9 @@
 {
   "name": "@layerzerolabs/oft-example",
-  "version": "0.5.9",
+  "version": "0.6.0",
   "private": true,
   "license": "MIT",
+  "type": "module",
   "scripts": {
     "clean": "rm -rf artifacts cache out",
     "compile:forge": "forge build",
@@ -51,6 +52,7 @@
     "eslint": "^8.55.0",
     "eslint-plugin-jest-extended": "~2.0.0",
     "ethers": "^5.7.2",
+    "hardhat": "^3.1.2",
     "mocha": "^10.2.0",
     "prettier": "^3.2.5",
     "solhint": "^4.1.1",
