@@ -20,53 +20,25 @@
     "test": "$npm_execpath run test:forge && $npm_execpath run test:hardhat",
     "test:forge": "forge test"
   },
-  "resolutions": {
-    "ethers": "^5.7.2"
-  },
   "devDependencies": {
-    "@babel/core": "^7.23.9",
-    "@layerzerolabs/eslint-config-next": "~2.3.39",
-    "@layerzerolabs/lz-definitions": "^3.0.75",
-    "@layerzerolabs/lz-evm-messagelib-v2": "^3.0.75",
-    "@layerzerolabs/lz-evm-protocol-v2": "^3.0.75",
-    "@layerzerolabs/lz-evm-v1-0.7": "^3.0.75",
-    "@layerzerolabs/lz-v2-utilities": "^3.0.75",
-    "@layerzerolabs/oapp-evm": "^0.3.2",
-    "@layerzerolabs/oapp-evm-upgradeable": "^0.1.2",
-    "@layerzerolabs/oft-evm": "^3.1.3",
-    "@layerzerolabs/oft-evm-upgradeable": "^3.1.0",
-    "@layerzerolabs/prettier-config-next": "^2.3.39",
-    "@layerzerolabs/solhint-config": "^3.0.12",
-    "@layerzerolabs/test-devtools-evm-foundry": "~6.0.3",
-    "@layerzerolabs/toolbox-foundry": "~0.1.12",
-    "@openzeppelin/contracts": "^5.0.2",
-    "@openzeppelin/contracts-upgradeable": "^5.0.2",
+    "@openzeppelin/contracts": "^5.4.0",
+    "@openzeppelin/contracts-upgradeable": "^5.4.0",
     "@rushstack/eslint-patch": "^1.7.0",
-    "@typechain/ethers-v5": "^11.1.2",
-    "@types/chai": "^4.3.11",
+    "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.6",
-    "@types/node": "~18.18.14",
-    "chai": "^4.4.1",
-    "concurrently": "~9.1.0",
-    "dotenv": "^16.4.1",
-    "eslint": "^8.55.0",
-    "eslint-plugin-jest-extended": "~2.0.0",
-    "ethers": "^5.7.2",
+    "@types/node": "^25.0.3",
+    "chai": "^6.2.2",
+    "concurrently": "^9.2.1",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.39.2",
+    "eslint-plugin-jest-extended": "^3.0.1",
+    "ethers": "^6.16.0",
     "hardhat": "^3.1.2",
-    "mocha": "^10.2.0",
+    "mocha": "^11.7.5",
     "prettier": "^3.2.5",
-    "solhint": "^4.1.1",
+    "solhint": "^6.0.2",
     "solidity-bytes-utils": "^0.8.2",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.4"
-  },
-  "pnpm": {
-    "overrides": {
-      "ethers": "^5.7.2"
-    }
-  },
-  "overrides": {
-    "ethers": "^5.7.2",
-    "form-data": "^4.0.4"
+    "typescript": "^5.9.3"
   }
 }
