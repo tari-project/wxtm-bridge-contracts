@@ -7,7 +7,6 @@ import '@layerzerolabs/toolbox-hardhat'
 import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
-import '@nomicfoundation/hardhat-verify'
 import '@rumblefishdev/hardhat-kms-signer'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
