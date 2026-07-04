@@ -8,6 +8,11 @@
   ],
   "license": "ISC",
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tari-project/wxtm-bridge-contracts.git",
+    "directory": "wxtm-bridge-contracts-typechain"
+  },
   "main": "index.js",
   "scripts": {
     "prebuild": "npm run copy",
@@ -15,6 +20,7 @@
     "copy": "../scripts/copy.sh"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   }
 }
