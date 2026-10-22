@@ -17,7 +17,8 @@ contract wTARIController is AccessControlUpgradeable {
 
     IwTARI private wtari;
 
-    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days).
+    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days), not a rolling one:
+    // up to 2x the limit can be minted across a window boundary.
     uint256 public lowMintDailyLimit;
     uint256 public lowMintWindow;
     uint256 public lowMintedInWindow;

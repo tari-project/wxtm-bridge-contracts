@@ -11,6 +11,7 @@ import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 
 import { networkForChain } from '../../scripts/wtari'
 import {
+    REFERENCE_SAFES,
     WtariChainConfig,
     checkWtariDeployment,
     deployWtari,
@@ -18,11 +19,15 @@ import {
     readWtariConfig,
     safeSingletons,
     verifyWtariContracts,
+    withRedactedRpcUrls,
 } from '../../tasks/wtari'
 import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const ROOT = path.join(__dirname, '..', '..')
 const SAFE_SINGLETON = '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762'
+// Runtime code of an official v1.4.1 SafeProxy (from SafeProxyFactory 0x4e1DCf7A...proxyCreationCode on Ethereum).
+const SAFE_PROXY_V141_RUNTIME =
+    '0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033'
 const OOTLE_ADDRESS =
     'otl_esm_1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7v9kn6'
 
@@ -46,7 +51,9 @@ const INTENTIONAL_DIFFS: { [clone: string]: [string, string][] } = {
         ],
         [
             '    IwTARI private wtari;\n',
-            '    IwTARI private wtari;\n\n    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days).\n' +
+            '    IwTARI private wtari;\n\n' +
+                '    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days), not a rolling one:\n' +
+                '    // up to 2x the limit can be minted across a window boundary.\n' +
                 '    uint256 public lowMintDailyLimit;\n    uint256 public lowMintWindow;\n    uint256 public lowMintedInWindow;\n',
         ],
         [
@@ -158,41 +165,76 @@ describe('wTARI config files', function () {
         expect(safeSingletons(999999)).to.deep.equal([])
     })
 
-    it('reject env var names and explorer hosts that could leak secrets', function () {
-        const file = path.join(ROOT, 'deploy', 'wtari', '999999.json')
-        const base = readWtariConfig(84532)
-        const cases: [object, string][] = [
-            [{ ...base, referenceRpcUrlEnv: 'PRIVATE_KEY' }, 'RPC env var PRIVATE_KEY must match'],
-            [{ ...base, network: { ...base.network, rpcUrlEnv: 'KMS_KEY_ID' } }, 'RPC env var KMS_KEY_ID must match'],
+    it('reject configs that could leak secrets or drop production protections', function () {
+        // Scratch configs: 999999 is not a real chain; 42161 (Arbitrum) is on the built-in mainnet list.
+        const testnet = { ...readWtariConfig(84532), explorer: undefined }
+        const mainnet = { ...readWtariConfig(8453), explorer: undefined }
+        const explorer = (apiURL: string) => ({ apiURL, browserURL: '' })
+        const cases: [number, object, string][] = [
+            [999999, { ...testnet, referenceRpcUrlEnv: 'PRIVATE_KEY' }, 'RPC env var PRIVATE_KEY must match'],
             [
-                { ...base, explorer: { apiURL: 'https://evil.example/v2/api', browserURL: '' } },
-                'explorer.apiURL must be on api.etherscan.io',
+                999999,
+                { ...testnet, network: { ...testnet.network, rpcUrlEnv: 'KMS_KEY_ID' } },
+                'RPC env var KMS_KEY_ID must match',
             ],
-            [{ ...base, production: undefined }, '"production" must be true or false'],
-            [{ ...base, production: true }, '"production" must be true exactly when referenceChainId is 1'],
             [
-                { ...readWtariConfig(8453), production: false },
-                '"production" must be true exactly when referenceChainId is 1',
+                999999,
+                { ...testnet, explorer: explorer('https://evil.example/v2/api?chainid=999999') },
+                'explorer.apiURL must be https://api.etherscan.io',
             ],
+            [
+                999999,
+                { ...testnet, explorer: explorer('http://api.etherscan.io/v2/api?chainid=999999') },
+                'explorer.apiURL must be https://api.etherscan.io',
+            ],
+            [
+                999999,
+                { ...testnet, explorer: explorer('https://api.etherscan.io/v2/api?chainid=84532') },
+                'explorer.apiURL must have chainid=999999',
+            ],
+            [999999, { ...testnet, production: undefined }, '"production" must be true or false'],
+            [999999, { ...testnet, production: true }, '"production" must be true exactly when referenceChainId is 1'],
+            [999999, { ...mainnet, production: false }, '"production" must be true exactly when referenceChainId is 1'],
+            [42161, { ...testnet, production: false }, 'chain 42161 is a mainnet, so "production" must be true'],
         ]
-        try {
-            for (const [bad, message] of cases) {
-                fs.writeFileSync(file, JSON.stringify(bad))
-                expect(() => readWtariConfig(999999)).to.throw(message)
+        for (const [chainId, bad, message] of cases) {
+            const file = path.join(ROOT, 'deploy', 'wtari', `${chainId}.json`)
+            fs.writeFileSync(file, JSON.stringify(bad))
+            try {
+                expect(() => readWtariConfig(chainId)).to.throw(message)
+            } finally {
+                fs.rmSync(file, { force: true })
             }
+        }
+    })
+
+    it('redact RPC URLs from errors', async function () {
+        const config = readWtariConfig(84532)
+        process.env.SEPOLIA_RPC_URL = 'https://sepolia.example/v2/SECRET_KEY'
+        try {
+            await expectRejection(
+                withRedactedRpcUrls(config, async () => {
+                    throw new Error(`could not detect network (url="${process.env.SEPOLIA_RPC_URL}")`)
+                }),
+                'could not detect network (url="<SEPOLIA_RPC_URL>")'
+            )
         } finally {
-            fs.rmSync(file, { force: true })
+            delete process.env.SEPOLIA_RPC_URL
         }
     })
 })
 
-// Local stand-in for the Etherscan V2 API: records request URLs and answers with the given bodies.
-async function startExplorerStub(submitReply: object, statusReply: object) {
+// Local stand-in for the Etherscan V2 API: answers by `action` and records request URLs.
+async function startExplorerStub(replies: { [action: string]: object }) {
     const urls: string[] = []
     const server = http.createServer((req, res) => {
         urls.push(`${req.method} ${req.url}`)
+        const action =
+            req.method === 'POST'
+                ? 'verifysourcecode'
+                : (new URL(req.url ?? '', 'http://stub').searchParams.get('action') ?? '')
         res.setHeader('content-type', 'application/json')
-        res.end(JSON.stringify(req.method === 'POST' ? submitReply : statusReply))
+        res.end(JSON.stringify(replies[action] ?? {}))
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const apiURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v2/api?chainid=84532`
@@ -200,12 +242,14 @@ async function startExplorerStub(submitReply: object, statusReply: object) {
 }
 
 describe('Etherscan V2 verification', function () {
+    const form = { contractaddress: '0x01', contractname: 'contracts/wTARI.sol:wTARI', compilerversion: 'v0.8.22' }
+
     it('submits and polls with the chainid query kept', async function () {
-        const stub = await startExplorerStub(
-            { status: '1', result: 'guid-1' },
-            { status: '1', result: 'Pass - Verified' }
-        )
-        await etherscanVerify(stub.apiURL, 'key', { contractaddress: '0x01' })
+        const stub = await startExplorerStub({
+            verifysourcecode: { status: '1', result: 'guid-1' },
+            checkverifystatus: { status: '1', result: 'Pass - Verified' },
+        })
+        await etherscanVerify(stub.apiURL, 'key', form)
         stub.server.close()
 
         expect(stub.urls[0]).to.equal('POST /v2/api?chainid=84532')
@@ -213,9 +257,28 @@ describe('Etherscan V2 verification', function () {
     })
 
     it('throws when the explorer rejects the submission', async function () {
-        const stub = await startExplorerStub({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }, {})
-        await expectRejection(etherscanVerify(stub.apiURL, 'key', {}), 'submit failed: NOTOK Invalid API Key')
+        const stub = await startExplorerStub({
+            verifysourcecode: { status: '0', message: 'NOTOK', result: 'Invalid API Key' },
+        })
+        await expectRejection(etherscanVerify(stub.apiURL, 'key', form), 'submit failed: NOTOK Invalid API Key')
         stub.server.close()
+    })
+
+    it('accepts "already verified" only when the published compiler and contract name match', async function () {
+        const alreadyVerified = { status: '0', result: 'Contract source code already verified' }
+        const matching = await startExplorerStub({
+            verifysourcecode: alreadyVerified,
+            getsourcecode: { status: '1', result: [{ ContractName: 'wTARI', CompilerVersion: 'v0.8.22' }] },
+        })
+        await etherscanVerify(matching.apiURL, 'key', form)
+        matching.server.close()
+
+        const different = await startExplorerStub({
+            verifysourcecode: alreadyVerified,
+            getsourcecode: { status: '1', result: [{ ContractName: 'Evil', CompilerVersion: 'v0.8.22' }] },
+        })
+        await expectRejection(etherscanVerify(different.apiURL, 'key', form), 'already verified with different source')
+        different.server.close()
     })
 })
 
@@ -223,12 +286,44 @@ describe('deploy:wtari dry run', function () {
     let deployer: SignerWithAddress
     let safeOwner: SignerWithAddress
     let user: SignerWithAddress
-    let safeFactory: ContractFactory
+    let safeAbi: object[]
+    let safeMockFactory: ContractFactory
     let endpoint: Contract
     let lowSafe: Contract
     let highSafe: Contract
     let adminSafe: Contract
     let config: WtariChainConfig
+
+    const toQuantity = (value: string | number) => ethers.BigNumber.from(value).toHexString()
+    const toWord = (value: string | number) => ethers.utils.hexZeroPad(ethers.BigNumber.from(value).toHexString(), 32)
+    const setStorage = (address: string, slot: string | number, value: string | number) =>
+        ethers.provider.send('hardhat_setStorageAt', [address, toQuantity(slot), toWord(value)])
+
+    // A real v1.4.1 SafeProxy whose singleton (SafeMock code at the official singleton address) uses
+    // SafeMock's storage layout: slot 0 singleton, 1 owners, 2 threshold, 3 modules.
+    async function makeSafe(owners: string[], threshold: number, singleton = SAFE_SINGLETON) {
+        const address = ethers.Wallet.createRandom().address
+        await ethers.provider.send('hardhat_setCode', [address, SAFE_PROXY_V141_RUNTIME])
+        await setStorage(address, 0, singleton)
+        await setStorage(address, 1, owners.length)
+        const ownersStart = ethers.BigNumber.from(ethers.utils.keccak256(toWord(1)))
+        for (let i = 0; i < owners.length; i++) {
+            await setStorage(address, ownersStart.add(i).toHexString(), owners[i])
+        }
+        await setStorage(address, 2, threshold)
+        return new Contract(address, safeAbi, safeOwner)
+    }
+
+    async function contracts() {
+        return {
+            token: await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address),
+            controller: await ethers.getContractAt(
+                'wTARIController',
+                (await deployments.get('wTARIController')).address
+            ),
+            bridge: await ethers.getContractAt('wTARIBridge', (await deployments.get('wTARIBridge')).address),
+        }
+    }
 
     before(async function () {
         ;[deployer, safeOwner, user] = await ethers.getSigners()
@@ -250,14 +345,19 @@ describe('deploy:wtari dry run', function () {
 
         // SafeMock is a test-only contract, so it is compiled by forge rather than hardhat.
         const safeArtifact = JSON.parse(fs.readFileSync(path.join(ROOT, 'out/SafeMock.sol/SafeMock.json'), 'utf8'))
-        safeFactory = new ContractFactory(safeArtifact.abi, safeArtifact.bytecode.object, deployer)
+        safeAbi = safeArtifact.abi
+        safeMockFactory = new ContractFactory(safeAbi, safeArtifact.bytecode.object, deployer)
+        const template = await safeMockFactory.deploy(SAFE_SINGLETON, [], 0)
+        await ethers.provider.send('hardhat_setCode', [SAFE_SINGLETON, await ethers.provider.getCode(template.address)])
 
         const owners = [safeOwner.address, user.address]
-        const referenceLowSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
-        const referenceHighSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
-        lowSafe = await safeFactory.deploy(SAFE_SINGLETON, [user.address, safeOwner.address], 2)
-        highSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
-        adminSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        REFERENCE_SAFES[31337] = {
+            mintLowSafe: (await makeSafe(owners, 2)).address,
+            mintHighSafe: (await makeSafe(owners, 2)).address,
+        }
+        lowSafe = await makeSafe([user.address, safeOwner.address], 2)
+        highSafe = await makeSafe(owners, 2)
+        adminSafe = await makeSafe(owners, 2)
 
         config = {
             network: { name: 'hardhat', rpcUrlEnv: 'UNUSED_RPC_URL', defaultRpcUrl: '', eid: 1 },
@@ -269,9 +369,11 @@ describe('deploy:wtari dry run', function () {
             confirmations: 1,
             referenceChainId: 31337,
             referenceRpcUrlEnv: 'UNUSED_RPC_URL',
-            referenceMintLowSafe: referenceLowSafe.address,
-            referenceMintHighSafe: referenceHighSafe.address,
         }
+    })
+
+    after(function () {
+        delete REFERENCE_SAFES[31337]
     })
 
     it('rejects the placeholder Base configs', async function () {
@@ -285,196 +387,84 @@ describe('deploy:wtari dry run', function () {
     })
 
     it('rejects a Safe whose owners differ from the reference Safe', async function () {
-        const otherSafe = await safeFactory.deploy(SAFE_SINGLETON, [user.address], 1)
-        const badConfig = { ...config, mintHighSafe: otherSafe.address }
+        const otherSafe = await makeSafe([user.address], 1)
         await expectRejection(
-            deployWtari(hre, badConfig, endpoint.address, ethers.provider),
+            deployWtari(hre, { ...config, mintHighSafe: otherSafe.address }, endpoint.address, ethers.provider),
             'owners differ from reference Safe'
         )
     })
 
-    it('rejects Safes with modules, a guard, a non-canonical singleton, or one Safe for both tiers', async function () {
+    it('rejects anything that is not a plain official Safe, and a weak or shared admin Safe', async function () {
         const owners = [safeOwner.address, user.address]
-        const withModule = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        const reject = (overrides: Partial<WtariChainConfig>, message: string) =>
+            expectRejection(deployWtari(hre, { ...config, ...overrides }, endpoint.address, ethers.provider), message)
+
+        const notAProxy = await safeMockFactory.deploy(SAFE_SINGLETON, owners, 2)
+        await reject({ mintHighSafe: notAProxy.address }, 'is not an official SafeProxy (runtime code hash mismatch)')
+
+        const withModule = await makeSafe(owners, 2)
         await withModule.addModule(user.address)
-        await expectRejection(
-            deployWtari(hre, { ...config, mintHighSafe: withModule.address }, endpoint.address, ethers.provider),
-            'has modules enabled'
-        )
+        await reject({ mintHighSafe: withModule.address }, 'has modules enabled')
 
-        const withGuard = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
-        const guardSlot = ethers.utils.id('guard_manager.guard.address')
-        await ethers.provider.send('hardhat_setStorageAt', [
-            withGuard.address,
-            guardSlot,
-            ethers.utils.hexZeroPad(user.address, 32),
-        ])
-        await expectRejection(
-            deployWtari(hre, { ...config, proxyAdminOwner: withGuard.address }, endpoint.address, ethers.provider),
-            'has a transaction guard set'
-        )
+        const withGuard = await makeSafe(owners, 2)
+        await setStorage(withGuard.address, ethers.utils.id('guard_manager.guard.address'), user.address)
+        await reject({ proxyAdminOwner: withGuard.address }, 'has a transaction guard set')
 
-        const fakeSingleton = await safeFactory.deploy(user.address, owners, 2)
-        await expectRejection(
-            deployWtari(hre, { ...config, mintHighSafe: fakeSingleton.address }, endpoint.address, ethers.provider),
-            'is not an official Safe singleton on chain 31337'
-        )
+        const withModuleGuard = await makeSafe(owners, 2)
+        await setStorage(withModuleGuard.address, ethers.utils.id('module_manager.module_guard.address'), user.address)
+        await reject({ mintHighSafe: withModuleGuard.address }, 'has a module guard set')
 
-        const withModuleGuard = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
-        await ethers.provider.send('hardhat_setStorageAt', [
-            withModuleGuard.address,
-            ethers.utils.id('module_manager.module_guard.address'),
-            ethers.utils.hexZeroPad(user.address, 32),
-        ])
-        await expectRejection(
-            deployWtari(hre, { ...config, mintHighSafe: withModuleGuard.address }, endpoint.address, ethers.provider),
-            'has a module guard set'
-        )
+        const fakeSingleton = await makeSafe(owners, 2, user.address)
+        await reject({ mintHighSafe: fakeSingleton.address }, 'is not an official Safe singleton on chain 31337')
 
-        await expectRejection(
-            deployWtari(hre, { ...config, mintHighSafe: lowSafe.address }, endpoint.address, ethers.provider),
-            'mintLowSafe and mintHighSafe must be different Safes'
+        await reject({ mintHighSafe: lowSafe.address }, 'mintLowSafe and mintHighSafe must be different Safes')
+        await reject({ proxyAdminOwner: highSafe.address }, 'proxyAdminOwner must differ from both mint Safes')
+        await reject(
+            { proxyAdminOwner: (await makeSafe(owners, 1)).address },
+            'proxyAdminOwner threshold 1 must be at least 2'
         )
     })
 
     it('rejects a reference provider on the wrong chain', async function () {
-        const badConfig = { ...config, referenceChainId: 1 }
         await expectRejection(
-            deployWtari(hre, badConfig, endpoint.address, ethers.provider),
+            deployWtari(hre, { ...config, referenceChainId: 1 }, endpoint.address, ethers.provider),
             'Reference provider is not on chain 1'
         )
     })
 
-    it('deploys, hands over admin, and passes the post-deploy check', async function () {
-        await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config, ethers.provider)
-
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        expect(await token.symbol()).to.equal('wTARI')
-        expect(await token.decimals()).to.equal(18)
+    it('deploys with the Safe in control and leaves one pending Safe transaction', async function () {
+        const pending = await deployWtari(hre, config, endpoint.address, ethers.provider)
+        const { token, controller } = await contracts()
+        expect(pending?.to).to.equal(token.address)
+        expect(pending?.value).to.equal('0')
+        expect(pending?.data).to.equal(
+            token.interface.encodeFunctionData('grantRole', [ethers.utils.id('MINTER_ROLE'), controller.address])
+        )
         expect(await token.owner()).to.equal(adminSafe.address)
-        expect(await token.hasRole(ethers.constants.HashZero, deployer.address)).to.equal(false)
 
-        // A second run is a no-op rather than a failure.
-        await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config, ethers.provider)
-    })
-
-    it('a re-run finishes an interrupted handover', async function () {
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        const adminRole = ethers.constants.HashZero
-
-        // Died after transferOwnership, before renounceRole: the deployer still holds admin.
-        await adminSafe
-            .connect(safeOwner)
-            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
-        await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config, ethers.provider)
-
-        // Died after setDelegate, before transferOwnership: the deployer is still owner and admin.
-        await adminSafe
-            .connect(safeOwner)
-            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
-        await adminSafe
-            .connect(safeOwner)
-            .exec(token.address, token.interface.encodeFunctionData('transferOwnership', [deployer.address]))
-        expect(await token.owner()).to.equal(deployer.address)
-        await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config, ethers.provider)
-        expect(await token.owner()).to.equal(adminSafe.address)
-        expect(await token.hasRole(adminRole, deployer.address)).to.equal(false)
-    })
-
-    it('uses the recorded deployer, not the current signer, for the handover and the check', async function () {
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        const adminRole = ethers.constants.HashZero
-        const getNamedAccounts = hre.getNamedAccounts
-        await adminSafe
-            .connect(safeOwner)
-            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
-
-        // Another key runs the tasks while the original deployer still holds admin.
-        hre.getNamedAccounts = async () => ({ deployer: user.address })
-        try {
-            await expectRejection(
-                deployWtari(hre, config, endpoint.address, ethers.provider),
-                `wTARI was deployed by ${deployer.address}, which still holds wTARI DEFAULT_ADMIN_ROLE`
-            )
-            await expectRejection(
-                checkWtariDeployment(hre, config, ethers.provider),
-                `deployer ${deployer.address} still holds wTARI DEFAULT_ADMIN_ROLE`
-            )
-        } finally {
-            hre.getNamedAccounts = getNamedAccounts
-        }
-
-        await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config, ethers.provider)
-    })
-
-    it('check:wtari catches extra role holders, OFT peers and a moved LZ delegate', async function () {
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        const asSafe = (fn: string, args: unknown[]) =>
-            adminSafe.connect(safeOwner).exec(token.address, token.interface.encodeFunctionData(fn, args))
-        const minterRole = ethers.utils.id('MINTER_ROLE')
-
-        await asSafe('grantRole', [minterRole, user.address])
         await expectRejection(
             checkWtariDeployment(hre, config, ethers.provider),
-            `wTARI: unexpected MINTER_ROLE holder ${user.address.toLowerCase()}`
+            'the controller does not have MINTER_ROLE yet; execute the pending Safe transaction'
         )
-        await asSafe('revokeRole', [minterRole, user.address])
 
-        await asSafe('setPeer', [2, ethers.utils.hexZeroPad(user.address, 32)])
-        await expectRejection(checkWtariDeployment(hre, config, ethers.provider), 'wTARI: OFT peer set for eid 2')
-        await asSafe('setPeer', [2, ethers.constants.HashZero])
+        await adminSafe.exec(pending?.to, pending?.data)
+        await checkWtariDeployment(hre, config, ethers.provider)
 
-        await asSafe('setDelegate', [user.address])
-        await expectRejection(
-            checkWtariDeployment(hre, config, ethers.provider),
-            `wTARI: LayerZero delegate ${user.address} is not proxyAdminOwner`
-        )
-        await asSafe('setDelegate', [adminSafe.address])
-
+        // A second run is a no-op with nothing pending.
+        expect(await deployWtari(hre, config, endpoint.address, ethers.provider)).to.equal(undefined)
         await checkWtariDeployment(hre, config, ethers.provider)
     })
 
-    it('verifyWtariContracts fails loudly, listing every unverified contract', async function () {
-        const stub = await startExplorerStub({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }, {})
-        const previousKey = process.env.ETHERSCAN_API_KEY
-        process.env.ETHERSCAN_API_KEY = 'key'
-        const explorer = { apiURL: stub.apiURL, browserURL: 'http://explorer' }
-        let message = ''
-        try {
-            await verifyWtariContracts(hre, { ...config, explorer })
-        } catch (e) {
-            message = (e as Error).message
+    it('never gives the deployer any role or ownership', async function () {
+        const { token, controller } = await contracts()
+        for (const contract of [token, controller]) {
+            expect(await contract.queryFilter(contract.filters.RoleGranted(null, deployer.address))).to.have.length(0)
         }
-        stub.server.close()
-        process.env.ETHERSCAN_API_KEY = previousKey
-
-        expect(message).to.include('Deployment is complete but these contracts are not verified')
-        for (const name of [
-            'wTARI_Implementation',
-            'wTARIController_Implementation',
-            'wTARIBridge_Implementation',
-            'wTARI_Proxy',
-            'wTARIController_Proxy',
-            'wTARIBridge_Proxy',
-            'wTARIProxyAdmin',
-        ]) {
-            expect(message).to.include(name)
-        }
+        expect(await token.queryFilter(token.filters.OwnershipTransferred(null, deployer.address))).to.have.length(0)
     })
 
     it('initializers cannot be re-run', async function () {
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        const controller = await ethers.getContractAt(
-            'wTARIController',
-            (await deployments.get('wTARIController')).address
-        )
-        const bridge = await ethers.getContractAt('wTARIBridge', (await deployments.get('wTARIBridge')).address)
-
+        const { token, controller, bridge } = await contracts()
         await expectRejection(token.initialize('x', 'x', '1', user.address), 'InvalidInitialization')
         await expectRejection(
             controller.initialize(user.address, user.address, user.address, user.address, 1),
@@ -484,12 +474,7 @@ describe('deploy:wtari dry run', function () {
     })
 
     it('mints through the low Safe and burns via bridgeToTariWithAuthorization with nonce 0', async function () {
-        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
-        const controller = await ethers.getContractAt(
-            'wTARIController',
-            (await deployments.get('wTARIController')).address
-        )
-        const bridge = await ethers.getContractAt('wTARIBridge', (await deployments.get('wTARIBridge')).address)
+        const { token, controller, bridge } = await contracts()
         const amount = ethers.utils.parseEther('3000')
 
         await expectRejection(
@@ -497,10 +482,10 @@ describe('deploy:wtari dry run', function () {
             'AccessControlUnauthorizedAccount'
         )
         const mintData = controller.interface.encodeFunctionData('mintLowAmount', [user.address, amount])
-        await lowSafe.connect(safeOwner).exec(controller.address, mintData)
+        await lowSafe.exec(controller.address, mintData)
         expect((await token.balanceOf(user.address)).toString()).to.equal(amount.toString())
 
-        const validBefore = Math.floor(Date.now() / 1000) + 3600
+        const validBefore = (await ethers.provider.getBlock('latest')).timestamp + 3600
         const authNonce = ethers.utils.id('auth-nonce')
         const signature = await user._signTypedData(
             { name: 'wTARI', version: '1', chainId: 31337, verifyingContract: token.address },
@@ -529,11 +514,94 @@ describe('deploy:wtari dry run', function () {
         expect(event.args.nonce.toNumber()).to.equal(0)
         expect((await token.balanceOf(user.address)).toNumber()).to.equal(0)
     })
+
+    it('verifyWtariContracts fails loudly, listing every unverified contract', async function () {
+        const stub = await startExplorerStub({
+            verifysourcecode: { status: '0', message: 'NOTOK', result: 'Invalid API Key' },
+        })
+        const previousKey = process.env.ETHERSCAN_API_KEY
+        process.env.ETHERSCAN_API_KEY = 'key'
+        let message = ''
+        try {
+            await verifyWtariContracts(hre, { ...config, explorer: { apiURL: stub.apiURL, browserURL: '' } })
+        } catch (e) {
+            message = (e as Error).message
+        }
+        stub.server.close()
+        process.env.ETHERSCAN_API_KEY = previousKey
+
+        expect(message).to.include('Deployment is complete but these contracts are not verified')
+        for (const name of [
+            'wTARI_Implementation',
+            'wTARIController_Implementation',
+            'wTARIBridge_Implementation',
+            'wTARI_Proxy',
+            'wTARIController_Proxy',
+            'wTARIBridge_Proxy',
+            'wTARIProxyAdmin',
+        ]) {
+            expect(message).to.include(name)
+        }
+    })
+
+    it('check:wtari catches changes it can undo: extra roles, LZ settings, budget and bytecode', async function () {
+        const { token, controller } = await contracts()
+        const asSafe = (contract: Contract, fn: string, args: unknown[]) =>
+            adminSafe.exec(contract.address, contract.interface.encodeFunctionData(fn, args))
+        const check = () => checkWtariDeployment(hre, config, ethers.provider)
+        const minterRole = ethers.utils.id('MINTER_ROLE')
+
+        await asSafe(token, 'grantRole', [minterRole, user.address])
+        await expectRejection(check(), `wTARI: unexpected MINTER_ROLE holder ${user.address.toLowerCase()}`)
+        await asSafe(token, 'revokeRole', [minterRole, user.address])
+
+        await asSafe(token, 'setDelegate', [user.address])
+        await expectRejection(check(), `wTARI: LayerZero delegate ${user.address} is not proxyAdminOwner`)
+        await asSafe(token, 'setDelegate', [adminSafe.address])
+
+        await asSafe(token, 'setMsgInspector', [user.address])
+        await expectRejection(check(), `wTARI: msgInspector is set to ${user.address}`)
+        await asSafe(token, 'setMsgInspector', [ethers.constants.AddressZero])
+
+        await asSafe(token, 'setPreCrime', [user.address])
+        await expectRejection(check(), `wTARI: preCrime is set to ${user.address}`)
+        await asSafe(token, 'setPreCrime', [ethers.constants.AddressZero])
+
+        await asSafe(controller, 'setLowMintDailyLimit', [1])
+        await expectRejection(check(), 'wTARIController: lowMintDailyLimit 0.000000000000000001 is not 500000')
+        await asSafe(controller, 'setLowMintDailyLimit', [ethers.utils.parseEther('500000')])
+
+        const bridgeImplementation = (await deployments.get('wTARIBridge_Implementation')).address
+        const bridgeCode = await ethers.provider.getCode(bridgeImplementation)
+        await ethers.provider.send('hardhat_setCode', [bridgeImplementation, bridgeCode.slice(0, -2) + '00'])
+        await expectRejection(check(), `wTARIBridge_Implementation ${bridgeImplementation}: runtime bytecode differs`)
+        await ethers.provider.send('hardhat_setCode', [bridgeImplementation, bridgeCode])
+
+        await check()
+    })
+
+    it('check:wtari keeps failing after a peer, enforced option or deployer grant was ever set', async function () {
+        const { token } = await contracts()
+        const asSafe = (fn: string, args: unknown[]) =>
+            adminSafe.exec(token.address, token.interface.encodeFunctionData(fn, args))
+        const check = () => checkWtariDeployment(hre, config, ethers.provider)
+
+        await asSafe('setPeer', [2, ethers.utils.hexZeroPad(user.address, 32)])
+        await asSafe('setPeer', [2, ethers.constants.HashZero])
+        await expectRejection(check(), 'wTARI: PeerSet emitted for eid 2')
+
+        await asSafe('setEnforcedOptions', [[{ eid: 2, msgType: 1, options: '0x0003' }]])
+        await expectRejection(check(), 'wTARI: EnforcedOptionSet emitted')
+
+        const minterRole = ethers.utils.id('MINTER_ROLE')
+        await asSafe('grantRole', [minterRole, deployer.address])
+        await asSafe('revokeRole', [minterRole, deployer.address])
+        await expectRejection(check(), `deployer ${deployer.address} was granted MINTER_ROLE`)
+    })
 })
 
 describe('typechain package deployments', function () {
     it('getDeployments accepts the chain ids returned by getWtariChains', function () {
-        // Type-level check too: getWtariChains() returns number[], which getDeployments must accept.
         for (const chainId of getWtariChains()) {
             expect(getDeployments(chainId).wTARIBridge).to.match(/^0x/)
         }
@@ -541,7 +609,7 @@ describe('typechain package deployments', function () {
         expect(getDeployments(11155111).wTARI).to.equal(undefined)
         expect(getDeployments(1).wXTM).to.equal('0xfD36fA88bb3feA8D1264fc89d70723b6a2B56958')
 
-        // Type-level: known chains keep wXTM required; other chain ids get optional fields.
+        // Type-level: wXTM chains keep wXTM required; other chain ids get optional fields.
         const known: WagmiAddress = getDeployments(1).wXTM
         const anyChain: WagmiAddress | undefined = getDeployments(getWtariChains()[0] ?? 8453).wXTM
         expect(known).to.not.equal(anyChain)

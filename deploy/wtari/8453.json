@@ -16,7 +16,5 @@
   "proxyAdminOwner": "0x0000000000000000000000000000000000000000",
   "confirmations": 5,
   "referenceChainId": 1,
-  "referenceRpcUrlEnv": "MAINNET_RPC_URL",
-  "referenceMintLowSafe": "0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee",
-  "referenceMintHighSafe": "0xFa2459708A9549C371963a3fCd239dd614E8D52C"
+  "referenceRpcUrlEnv": "MAINNET_RPC_URL"
 }
