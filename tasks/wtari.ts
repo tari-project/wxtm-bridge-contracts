@@ -410,32 +410,48 @@ function maskImmutables(code: string, immutableReferences: { [id: string]: { sta
     return ethers.utils.hexlify(bytes)
 }
 
-/** Compiled runtime bytecode and immutable references for each deployed wTARI contract record. */
-async function compiledRuntimes(hre: HardhatRuntimeEnvironment) {
-    const compiled: [string, string, { [id: string]: { start: number; length: number }[] }][] = []
-    for (const [record, sourceName, contractName] of [
-        ['wTARI_Implementation', 'contracts/wTARI.sol', 'wTARI'],
-        ['wTARIController_Implementation', 'contracts/wTARIController.sol', 'wTARIController'],
-        ['wTARIBridge_Implementation', 'contracts/wTARIBridge.sol', 'wTARIBridge'],
-    ]) {
-        const buildInfo = await hre.artifacts.getBuildInfo(`${sourceName}:${contractName}`)
-        const deployed = buildInfo?.output.contracts[sourceName][contractName].evm.deployedBytecode
-        if (!deployed) throw new Error(`No build info for ${sourceName}:${contractName}; run hardhat compile`)
-        compiled.push([record, `0x${deployed.object}`, deployed.immutableReferences ?? {}])
+type ImmutableReferences = { [id: string]: { start: number; length: number }[] }
+
+/** Compiled runtime bytecode, immutable references and storage slots of one of our contracts. */
+async function compiledContract(hre: HardhatRuntimeEnvironment, contractName: string) {
+    const sourceName = `contracts/${contractName}.sol`
+    const buildInfo = await hre.artifacts.getBuildInfo(`${sourceName}:${contractName}`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = buildInfo?.output.contracts[sourceName][contractName] as any
+    if (!output) throw new Error(`No build info for ${sourceName}:${contractName}; run hardhat compile`)
+    const slots: { [label: string]: string } = {}
+    // storageLayout gives decimal slot strings; getStorageAt needs a number or hex.
+    for (const entry of output.storageLayout.storage)
+        slots[entry.label] = ethers.BigNumber.from(entry.slot).toHexString()
+    return {
+        code: `0x${output.evm.deployedBytecode.object}`,
+        immutableReferences: (output.evm.deployedBytecode.immutableReferences ?? {}) as ImmutableReferences,
+        slots,
     }
-    for (const record of ['wTARI_Proxy', 'wTARIController_Proxy', 'wTARIBridge_Proxy']) {
-        const proxyRefs = TransparentUpgradeableProxy.evm.deployedBytecode.immutableReferences
-        compiled.push([record, TransparentUpgradeableProxy.deployedBytecode, proxyRefs])
-    }
-    compiled.push([PROXY_ADMIN_NAME, ProxyAdmin.deployedBytecode, ProxyAdmin.evm.deployedBytecode.immutableReferences])
-    return compiled
+}
+
+async function sameRuntimeCode(
+    provider: providers.Provider,
+    address: string,
+    compiledCode: string,
+    immutableReferences: ImmutableReferences
+) {
+    const onChain = await provider.getCode(address)
+    return maskImmutables(onChain, immutableReferences) === maskImmutables(compiledCode, immutableReferences)
+}
+
+/** The official EndpointV2 for a LayerZero endpoint id. */
+export function officialLzEndpoint(eid: number) {
+    return getDeploymentAddressAndAbi(endpointIdToNetwork(eid as EndpointId), 'EndpointV2').address
 }
 
 /** Post-deploy review of Safes, roles, ownership, LZ config, bytecode and proxy slots. */
 export async function checkWtariDeployment(
     hre: HardhatRuntimeEnvironment,
     config: WtariChainConfig,
-    referenceProvider: providers.Provider
+    referenceProvider: providers.Provider,
+    // Only for the local hardhat network, where the endpoint is a mock.
+    expectedLzEndpoint = officialLzEndpoint(config.network.eid)
 ) {
     const { get, read } = hre.deployments
     const provider = hre.ethers.provider
@@ -491,11 +507,16 @@ export async function checkWtariDeployment(
     if ((await read(PROXY_ADMIN_NAME, 'owner')).toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
         failures.push(`${PROXY_ADMIN_NAME}: owner is not proxyAdminOwner ${config.proxyAdminOwner}`)
     }
-    const lzEndpoint = (await get('wTARI_Implementation')).args?.[0]
-    const endpoint = new Contract(lzEndpoint, ['function delegates(address) view returns (address)'], provider)
-    const delegate = await endpoint.delegates(token.address)
-    if (delegate.toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
-        failures.push(`wTARI: LayerZero delegate ${delegate} is not proxyAdminOwner ${config.proxyAdminOwner}`)
+    // The endpoint is an immutable masked in the bytecode comparison, so check it via the getter.
+    const lzEndpoint = await read('wTARI', 'endpoint')
+    if (lzEndpoint.toLowerCase() !== expectedLzEndpoint.toLowerCase()) {
+        failures.push(`wTARI: endpoint() ${lzEndpoint} is not the official LayerZero endpoint ${expectedLzEndpoint}`)
+    } else {
+        const endpoint = new Contract(lzEndpoint, ['function delegates(address) view returns (address)'], provider)
+        const delegate = await endpoint.delegates(token.address)
+        if (delegate.toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
+            failures.push(`wTARI: LayerZero delegate ${delegate} is not proxyAdminOwner ${config.proxyAdminOwner}`)
+        }
     }
     for (const getter of ['msgInspector', 'preCrime']) {
         const value = await read('wTARI', getter)
@@ -528,21 +549,21 @@ export async function checkWtariDeployment(
         if (event.name === 'EnforcedOptionSet') failures.push('wTARI: EnforcedOptionSet emitted')
     }
 
-    for (const [record, compiledCode, immutableReferences] of await compiledRuntimes(hre)) {
-        const { address } = await get(record)
-        const onChain = await provider.getCode(address)
-        if (maskImmutables(onChain, immutableReferences) !== maskImmutables(compiledCode, immutableReferences)) {
-            failures.push(`${record} ${address}: runtime bytecode differs from the compiled artifact`)
-        }
-    }
-
-    for (const deployment of [token, controller, bridge]) {
+    // Bytecode is compared at the addresses the proxies actually use, read from their EIP-1967 slots.
+    const proxyRefs = TransparentUpgradeableProxy.evm.deployedBytecode.immutableReferences
+    const admins = new Set<string>()
+    for (const [deployment, contractName] of [
+        [token, 'wTARI'],
+        [controller, 'wTARIController'],
+        [bridge, 'wTARIBridge'],
+    ] as const) {
         const admin = ethers.utils.hexDataSlice(await provider.getStorageAt(deployment.address, ADMIN_SLOT), 12)
         const implementation = ethers.utils.hexDataSlice(
             await provider.getStorageAt(deployment.address, IMPLEMENTATION_SLOT),
             12
         )
         console.log(`proxy ${deployment.address}: admin ${admin}, implementation ${implementation}`)
+        admins.add(admin)
         if (admin.toLowerCase() !== proxyAdmin.address.toLowerCase()) {
             failures.push(
                 `proxy ${deployment.address}: admin ${admin} is not ${PROXY_ADMIN_NAME} ${proxyAdmin.address}`
@@ -550,6 +571,42 @@ export async function checkWtariDeployment(
         }
         if (implementation.toLowerCase() !== deployment.implementation?.toLowerCase()) {
             failures.push(`proxy ${deployment.address}: implementation ${implementation} differs from the record`)
+        }
+        if (
+            !(await sameRuntimeCode(
+                provider,
+                deployment.address,
+                TransparentUpgradeableProxy.deployedBytecode,
+                proxyRefs
+            ))
+        ) {
+            failures.push(
+                `${contractName} proxy ${deployment.address}: runtime bytecode differs from the compiled artifact`
+            )
+        }
+        const compiled = await compiledContract(hre, contractName)
+        if (!(await sameRuntimeCode(provider, implementation, compiled.code, compiled.immutableReferences))) {
+            failures.push(
+                `${contractName} implementation ${implementation}: runtime bytecode differs from the compiled artifact`
+            )
+        }
+    }
+    for (const admin of admins) {
+        const adminRefs = ProxyAdmin.evm.deployedBytecode.immutableReferences
+        if (!(await sameRuntimeCode(provider, admin, ProxyAdmin.deployedBytecode, adminRefs))) {
+            failures.push(`${PROXY_ADMIN_NAME} ${admin}: runtime bytecode differs from the compiled artifact`)
+        }
+    }
+
+    // Initializer state the bytecode cannot show: both contracts must point at this wTARI proxy.
+    for (const [deployment, contractName, label] of [
+        [controller, 'wTARIController', 'wtari'],
+        [bridge, 'wTARIBridge', 'wTARI'],
+    ] as const) {
+        const slot = (await compiledContract(hre, contractName)).slots[label]
+        const pointer = ethers.utils.hexDataSlice(await provider.getStorageAt(deployment.address, slot), 12)
+        if (pointer.toLowerCase() !== token.address.toLowerCase()) {
+            failures.push(`${contractName}: token pointer ${pointer} is not the wTARI proxy ${token.address}`)
         }
     }
 
@@ -717,10 +774,7 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             }
             const referenceProvider = referenceProviderFor(config)
 
-            const lzNetwork = endpointIdToNetwork(config.network.eid as EndpointId)
-            const { address: lzEndpoint } = getDeploymentAddressAndAbi(lzNetwork, 'EndpointV2')
-
-            const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
+            const pending = await deployWtari(hre, config, officialLzEndpoint(config.network.eid), referenceProvider)
             if (!pending) await checkWtariDeployment(hre, config, referenceProvider)
             if (hre.network.name !== 'hardhat') await verifyWtariContracts(hre, config)
             if (pending) {

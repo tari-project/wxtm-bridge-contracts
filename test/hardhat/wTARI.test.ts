@@ -443,16 +443,16 @@ describe('deploy:wtari dry run', function () {
         expect(await token.owner()).to.equal(adminSafe.address)
 
         await expectRejection(
-            checkWtariDeployment(hre, config, ethers.provider),
+            checkWtariDeployment(hre, config, ethers.provider, endpoint.address),
             'the controller does not have MINTER_ROLE yet; execute the pending Safe transaction'
         )
 
         await adminSafe.exec(pending?.to, pending?.data)
-        await checkWtariDeployment(hre, config, ethers.provider)
+        await checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
 
         // A second run is a no-op with nothing pending.
         expect(await deployWtari(hre, config, endpoint.address, ethers.provider)).to.equal(undefined)
-        await checkWtariDeployment(hre, config, ethers.provider)
+        await checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
     })
 
     it('never gives the deployer any role or ownership', async function () {
@@ -548,7 +548,7 @@ describe('deploy:wtari dry run', function () {
         const { token, controller } = await contracts()
         const asSafe = (contract: Contract, fn: string, args: unknown[]) =>
             adminSafe.exec(contract.address, contract.interface.encodeFunctionData(fn, args))
-        const check = () => checkWtariDeployment(hre, config, ethers.provider)
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
         const minterRole = ethers.utils.id('MINTER_ROLE')
 
         await asSafe(token, 'grantRole', [minterRole, user.address])
@@ -574,8 +574,42 @@ describe('deploy:wtari dry run', function () {
         const bridgeImplementation = (await deployments.get('wTARIBridge_Implementation')).address
         const bridgeCode = await ethers.provider.getCode(bridgeImplementation)
         await ethers.provider.send('hardhat_setCode', [bridgeImplementation, bridgeCode.slice(0, -2) + '00'])
-        await expectRejection(check(), `wTARIBridge_Implementation ${bridgeImplementation}: runtime bytecode differs`)
+        await expectRejection(
+            check(),
+            `wTARIBridge implementation ${bridgeImplementation.toLowerCase()}: runtime bytecode differs`
+        )
         await ethers.provider.send('hardhat_setCode', [bridgeImplementation, bridgeCode])
+
+        // The implementation bytecode is checked at the proxy's slot address, not the record's.
+        const bridgeProxy = (await deployments.get('wTARIBridge')).address
+        const implementationSlot = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'
+        const otherImplementation = (await deployments.get('wTARIController_Implementation')).address
+        await setStorage(bridgeProxy, implementationSlot, otherImplementation)
+        await expectRejection(
+            check(),
+            `wTARIBridge implementation ${otherImplementation.toLowerCase()}: runtime bytecode differs`
+        )
+        await setStorage(bridgeProxy, implementationSlot, bridgeImplementation)
+
+        // Initializer state: the bridge and controller must point at this wTARI proxy.
+        await setStorage(bridgeProxy, 1, user.address)
+        await expectRejection(
+            check(),
+            `wTARIBridge: token pointer ${user.address.toLowerCase()} is not the wTARI proxy ${token.address}`
+        )
+        await setStorage(bridgeProxy, 1, token.address)
+        await setStorage(controller.address, 0, user.address)
+        await expectRejection(
+            check(),
+            `wTARIController: token pointer ${user.address.toLowerCase()} is not the wTARI proxy ${token.address}`
+        )
+        await setStorage(controller.address, 0, token.address)
+
+        // The endpoint must be the official one for the chain, whatever the record says.
+        await expectRejection(
+            checkWtariDeployment(hre, config, ethers.provider, user.address),
+            `wTARI: endpoint() ${endpoint.address} is not the official LayerZero endpoint ${user.address}`
+        )
 
         await check()
     })
@@ -584,7 +618,7 @@ describe('deploy:wtari dry run', function () {
         const { token } = await contracts()
         const asSafe = (fn: string, args: unknown[]) =>
             adminSafe.exec(token.address, token.interface.encodeFunctionData(fn, args))
-        const check = () => checkWtariDeployment(hre, config, ethers.provider)
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
 
         await asSafe('setPeer', [2, ethers.utils.hexZeroPad(user.address, 32)])
         await asSafe('setPeer', [2, ethers.constants.HashZero])

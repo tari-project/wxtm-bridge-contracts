@@ -41,9 +41,10 @@ Because only the proxy-admin Safe is wTARI admin, `deploy:wtari` cannot grant th
   - `hasRole` grants match this chain's Safes and every role holder has code on this chain;
   - the exact set of `DEFAULT_ADMIN` / `MINTER` / `LOW_MINTER` / `HIGH_MINTER` holders on wTARI and wTARIController, rebuilt from `RoleGranted` / `RoleRevoked` logs since deployment, equals the expected set;
   - neither the deployer (the `from` of the creation transaction, read from the chain) nor the current signer holds any role or ownership, and no `RoleGranted` to the deployer was ever emitted;
-  - `wTARI.owner()`, `wTARIProxyAdmin.owner()` and the LayerZero `delegates(wTARI)` are the proxy-admin Safe;
+  - `wTARI.endpoint()` is the official LayerZero EndpointV2 for the chain's eid, and `wTARI.owner()`, `wTARIProxyAdmin.owner()` and that endpoint's `delegates(wTARI)` are the proxy-admin Safe;
+  - wTARIBridge's `wTARI` and wTARIController's `wtari` storage slots (from the compiler storage layout) hold the wTARI proxy address;
   - `msgInspector()` and `preCrime()` are unset, and no `PeerSet` or `EnforcedOptionSet` event was ever emitted (logs from the creation block, read from the chain);
-  - every implementation, proxy and `wTARIProxyAdmin` has the compiled runtime bytecode (immutables masked);
+  - every proxy, the implementation at each proxy's EIP-1967 implementation slot, and the `wTARIProxyAdmin` at the proxies' admin slot have the compiled runtime bytecode (immutables masked);
   - `lowMintDailyLimit` equals the config's `lowMintDailyLimit`;
   - every proxy's EIP-1967 admin is `wTARIProxyAdmin` and its implementation matches the record.
 - [ ] `mintLowAmount` / `mintHighAmount` are callable only by the respective Safe (`wTARITest.test_mint_*_only_by_*_safe`; on testnets also one real mint-low Safe transaction). The low-tier daily budget printed by `check:wtari` is the intended value.
