@@ -29,7 +29,7 @@ The proxy-admin Safe is the **sole trust root** for this chain: it owns `wTARIPr
 - [ ] Initializers cannot be re-run (`wTARITest.test_initializers_cannot_be_rerun`, hardhat "initializers cannot be re-run").
 - [ ] Proxy admin and implementation addresses recorded above (printed by `check:wtari`).
 - [ ] `npm run check:wtari -- --chain <chainId>` passes. It checks:
-  - mint-low, mint-high and proxy-admin Safes: code, a canonical Safe singleton, no modules, no guard; mint Safes have the reference Ethereum Safe's owners and threshold and are two different Safes;
+  - mint-low, mint-high and proxy-admin Safes: code, an official Safe singleton for this chain (v1.3.0 / v1.4.1 / v1.5.0, from `@safe-global/safe-deployments`), no modules, no transaction or module guard; mint Safes have the reference Ethereum Safe's owners and threshold and are two different Safes;
   - `hasRole` grants match this chain's Safes and every role holder has code on this chain;
   - the exact set of `DEFAULT_ADMIN` / `MINTER` / `LOW_MINTER` / `HIGH_MINTER` holders on wTARI and wTARIController, rebuilt from `RoleGranted` / `RoleRevoked` logs since deployment, equals the expected set;
   - neither the recorded deployer (from the deployment receipt) nor the current signer holds any role or ownership;
@@ -43,6 +43,10 @@ The proxy-admin Safe is the **sole trust root** for this chain: it owns `wTARIPr
 - [ ] Known: tokens transferred directly to wTARIBridge (not via `bridgeToTari*`) are stuck; the bridge has no access control, so there is no rescue function.
 - [ ] Production chains (`"production": true`) were deployed with `KMS_KEY_ID` and an explicit RPC env var.
 - [ ] All 7 contracts verified on the explorer (`verify:wtari`: 3 implementations, 3 proxies, `wTARIProxyAdmin`) and token metadata submitted.
+
+## Adding a chain
+
+A new chain needs only `deploy/wtari/<chainId>.json`. The chain must also be listed by the pinned `@safe-global/safe-deployments` devDependency; if it is not, `deploy:wtari` and `check:wtari` refuse with `not an official Safe singleton on chain <chainId>`. The fix is bumping that devDependency in `package.json` (and `npm install`), not a code change.
 
 ## Recovery: CREATE2 address already taken
 
