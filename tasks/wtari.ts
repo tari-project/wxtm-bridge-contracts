@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
+import { getSafeL2SingletonDeployments, getSafeSingletonDeployments } from '@safe-global/safe-deployments'
 import { Contract, ethers, providers } from 'ethers'
 import { task, types } from 'hardhat/config'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
@@ -33,15 +34,11 @@ const SAFE_ABI = [
     'function getThreshold() view returns (uint256)',
     'function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)',
 ]
-// Canonical singletons (@safe-global/safe-deployments): v1.3.0, v1.3.0 L2, v1.4.1, v1.4.1 L2.
-const SAFE_SINGLETONS = [
-    '0xd9db270c1b5e3bd161e8c8503c55ceabee709552',
-    '0x3e5c63644e683549055b9be8653de26e0b4cd36e',
-    '0x41675c099f32341bf84bfc5382af534df5c7461a',
-    '0x29fcb43b46531bca003ddc8fcb67ffe91900c762',
-]
+const SAFE_VERSIONS = ['1.3.0', '1.4.1', '1.5.0']
 const SAFE_SENTINEL = '0x0000000000000000000000000000000000000001'
 const SAFE_GUARD_SLOT = ethers.utils.id('guard_manager.guard.address')
+// v1.5.0 only; always zero on older versions.
+const SAFE_MODULE_GUARD_SLOT = ethers.utils.id('module_manager.module_guard.address')
 
 const PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
 const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
@@ -66,6 +63,25 @@ const EVENTS = new ethers.utils.Interface([
 // Many RPCs cap eth_getLogs ranges, so logs are fetched in chunks.
 const LOG_BLOCK_RANGE = 10_000
 
+/** Official Safe and SafeL2 singletons for `chainId`, from @safe-global/safe-deployments (lowercase). */
+export function safeSingletons(chainId: number): string[] {
+    // The local hardhat network is not listed; it uses Ethereum mainnet's set.
+    const network = chainId === 31337 ? '1' : String(chainId)
+    const singletons: string[] = []
+    for (const version of SAFE_VERSIONS) {
+        for (const deployment of [
+            getSafeSingletonDeployments({ version }),
+            getSafeL2SingletonDeployments({ version }),
+        ]) {
+            const addresses = deployment?.networkAddresses[network] ?? []
+            for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
+                singletons.push(address.toLowerCase())
+            }
+        }
+    }
+    return singletons
+}
+
 const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
 const RPC_ENV_PATTERN = /^[A-Z0-9_]+_RPC_URL$/
 
@@ -76,6 +92,16 @@ export function readWtariConfig(chainId: number): WtariChainConfig {
         if (!RPC_ENV_PATTERN.test(name)) {
             throw new Error(`deploy/wtari/${chainId}.json: RPC env var ${name} must match ${RPC_ENV_PATTERN}`)
         }
+    }
+    // Production protections (KMS, explicit RPC) must not be lost to a missing field, and only
+    // mainnet chains compare against the Ethereum mainnet Safes.
+    if (typeof config.production !== 'boolean') {
+        throw new Error(`deploy/wtari/${chainId}.json: "production" must be true or false`)
+    }
+    if (config.production !== (config.referenceChainId === 1)) {
+        throw new Error(
+            `deploy/wtari/${chainId}.json: "production" must be true exactly when referenceChainId is 1 (Ethereum mainnet)`
+        )
     }
     if (config.explorer && new URL(config.explorer.apiURL).host !== 'api.etherscan.io') {
         throw new Error(`deploy/wtari/${chainId}.json: explorer.apiURL must be on api.etherscan.io`)
@@ -101,7 +127,7 @@ async function checkHasCode(provider: providers.Provider, label: string, address
     }
 }
 
-/** Code, canonical singleton, no modules, no guard; and owners/threshold equal to the reference Safe if given. */
+/** Code, official singleton, no modules, no guards; and owners/threshold equal to the reference Safe if given. */
 async function checkSafe(
     provider: providers.Provider,
     label: string,
@@ -113,8 +139,9 @@ async function checkSafe(
     const target = new Contract(safe, SAFE_ABI, provider)
 
     const singleton = ethers.utils.hexDataSlice(await provider.getStorageAt(safe, 0), 12)
-    if (!SAFE_SINGLETONS.includes(singleton.toLowerCase())) {
-        throw new Error(`${label} ${safe} singleton ${singleton} is not a canonical Safe singleton`)
+    const { chainId } = await provider.getNetwork()
+    if (!safeSingletons(chainId).includes(singleton.toLowerCase())) {
+        throw new Error(`${label} ${safe} singleton ${singleton} is not an official Safe singleton on chain ${chainId}`)
     }
     const [modules] = await target.getModulesPaginated(SAFE_SENTINEL, 10)
     if (modules.length > 0) {
@@ -122,6 +149,9 @@ async function checkSafe(
     }
     if (!ethers.BigNumber.from(await provider.getStorageAt(safe, SAFE_GUARD_SLOT)).isZero()) {
         throw new Error(`${label} ${safe} has a transaction guard set`)
+    }
+    if (!ethers.BigNumber.from(await provider.getStorageAt(safe, SAFE_MODULE_GUARD_SLOT)).isZero()) {
+        throw new Error(`${label} ${safe} has a module guard set`)
     }
 
     if (!referenceProvider || !referenceSafe) return

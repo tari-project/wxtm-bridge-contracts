@@ -16,6 +16,7 @@ import {
     deployWtari,
     etherscanVerify,
     readWtariConfig,
+    safeSingletons,
     verifyWtariContracts,
 } from '../../tasks/wtari'
 import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
@@ -145,6 +146,18 @@ describe('wTARI config files', function () {
         expect(readWtariConfig(84532).production).to.equal(false)
     })
 
+    it('take the allowed Safe singletons for each chain from @safe-global/safe-deployments', function () {
+        for (const chainId of [8453, 84532]) {
+            const singletons = safeSingletons(chainId)
+            // v1.3.0 canonical + eip155, v1.4.1, and v1.5.0 where listed.
+            expect(singletons).to.include('0x69f4d1788e39c87893c980c06edf4b7f686e2938')
+            expect(singletons).to.include('0xfb1bffc9d739b8d520daf37df666da4c687191ea')
+            expect(singletons).to.include('0x29fcb43b46531bca003ddc8fcb67ffe91900c762')
+        }
+        expect(safeSingletons(8453)).to.include('0xedd160febbd92e350d4d398fb636302fccd67c7e')
+        expect(safeSingletons(999999)).to.deep.equal([])
+    })
+
     it('reject env var names and explorer hosts that could leak secrets', function () {
         const file = path.join(ROOT, 'deploy', 'wtari', '999999.json')
         const base = readWtariConfig(84532)
@@ -154,6 +167,12 @@ describe('wTARI config files', function () {
             [
                 { ...base, explorer: { apiURL: 'https://evil.example/v2/api', browserURL: '' } },
                 'explorer.apiURL must be on api.etherscan.io',
+            ],
+            [{ ...base, production: undefined }, '"production" must be true or false'],
+            [{ ...base, production: true }, '"production" must be true exactly when referenceChainId is 1'],
+            [
+                { ...readWtariConfig(8453), production: false },
+                '"production" must be true exactly when referenceChainId is 1',
             ],
         ]
         try {
@@ -298,7 +317,18 @@ describe('deploy:wtari dry run', function () {
         const fakeSingleton = await safeFactory.deploy(user.address, owners, 2)
         await expectRejection(
             deployWtari(hre, { ...config, mintHighSafe: fakeSingleton.address }, endpoint.address, ethers.provider),
-            'is not a canonical Safe singleton'
+            'is not an official Safe singleton on chain 31337'
+        )
+
+        const withModuleGuard = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        await ethers.provider.send('hardhat_setStorageAt', [
+            withModuleGuard.address,
+            ethers.utils.id('module_manager.module_guard.address'),
+            ethers.utils.hexZeroPad(user.address, 32),
+        ])
+        await expectRejection(
+            deployWtari(hre, { ...config, mintHighSafe: withModuleGuard.address }, endpoint.address, ethers.provider),
+            'has a module guard set'
         )
 
         await expectRejection(
@@ -515,5 +545,8 @@ describe('typechain package deployments', function () {
         const known: WagmiAddress = getDeployments(1).wXTM
         const anyChain: WagmiAddress | undefined = getDeployments(getWtariChains()[0] ?? 8453).wXTM
         expect(known).to.not.equal(anyChain)
+        // @ts-expect-error Base has no wXTM, so getDeployments(8453).wXTM is WagmiAddress | undefined.
+        const base: WagmiAddress = getDeployments(8453).wXTM
+        expect(base).to.equal(undefined)
     })
 })
