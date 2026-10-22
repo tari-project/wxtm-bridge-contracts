@@ -7,6 +7,7 @@ import { Contract, ContractFactory } from 'ethers'
 import hre, { deployments, ethers } from 'hardhat'
 
 import { WtariChainConfig, checkWtariDeployment, deployWtari, readWtariConfig } from '../../tasks/wtari'
+import { getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const ROOT = path.join(__dirname, '..', '..')
 const OOTLE_ADDRESS =
@@ -68,6 +69,7 @@ describe('deploy:wtari dry run', function () {
         adminSafe = await safeFactory.deploy(owners, 2)
 
         config = {
+            network: { name: 'hardhat', rpcUrlEnv: 'UNUSED', defaultRpcUrl: '', eid: 1 },
             mintLowSafe: lowSafe.address,
             mintHighSafe: highSafe.address,
             proxyAdminOwner: adminSafe.address,
@@ -119,6 +121,31 @@ describe('deploy:wtari dry run', function () {
         // A second run is a no-op rather than a failure.
         await deployWtari(hre, config, endpoint.address, ethers.provider)
         await checkWtariDeployment(hre, config)
+    })
+
+    it('a re-run finishes an interrupted handover', async function () {
+        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
+        const adminRole = ethers.constants.HashZero
+
+        // Died after transferOwnership, before renounceRole: the deployer still holds admin.
+        await adminSafe
+            .connect(safeOwner)
+            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
+        await deployWtari(hre, config, endpoint.address, ethers.provider)
+        await checkWtariDeployment(hre, config)
+
+        // Died after setDelegate, before transferOwnership: the deployer is still owner and admin.
+        await adminSafe
+            .connect(safeOwner)
+            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
+        await adminSafe
+            .connect(safeOwner)
+            .exec(token.address, token.interface.encodeFunctionData('transferOwnership', [deployer.address]))
+        expect(await token.owner()).to.equal(deployer.address)
+        await deployWtari(hre, config, endpoint.address, ethers.provider)
+        await checkWtariDeployment(hre, config)
+        expect(await token.owner()).to.equal(adminSafe.address)
+        expect(await token.hasRole(adminRole, deployer.address)).to.equal(false)
     })
 
     it('initializers cannot be re-run', async function () {
@@ -182,5 +209,17 @@ describe('deploy:wtari dry run', function () {
         expect(event.args.amount.toString()).to.equal(amount.toString())
         expect(event.args.nonce.toNumber()).to.equal(0)
         expect((await token.balanceOf(user.address)).toNumber()).to.equal(0)
+    })
+})
+
+describe('typechain package deployments', function () {
+    it('getDeployments accepts the chain ids returned by getWtariChains', function () {
+        // Type-level check too: getWtariChains() returns number[], which getDeployments must accept.
+        for (const chainId of getWtariChains()) {
+            expect(getDeployments(chainId).wTARIBridge).to.match(/^0x/)
+        }
+        expect(getDeployments(1).wTARI).to.equal(undefined)
+        expect(getDeployments(11155111).wTARI).to.equal(undefined)
+        expect(getDeployments(1).wXTM).to.equal('0xfD36fA88bb3feA8D1264fc89d70723b6a2B56958')
     })
 })

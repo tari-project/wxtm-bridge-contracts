@@ -1,4 +1,16 @@
 {
+  "network": {
+    "name": "base-mainnet",
+    "rpcUrlEnv": "BASE_RPC_URL",
+    "defaultRpcUrl": "https://mainnet.base.org",
+    "eid": 30184
+  },
+  "explorer": {
+    "network": "base",
+    "apiURL": "https://api.basescan.org/api",
+    "browserURL": "https://basescan.org",
+    "apiKeyEnv": "BASESCAN_API_KEY"
+  },
   "mintLowSafe": "0x0000000000000000000000000000000000000000",
   "mintHighSafe": "0x0000000000000000000000000000000000000000",
   "proxyAdminOwner": "0x0000000000000000000000000000000000000000",

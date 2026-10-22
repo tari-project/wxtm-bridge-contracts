@@ -12,6 +12,10 @@ import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 import verify from '../utils/verify'
 
 export interface WtariChainConfig {
+    // Hardhat network for this chain; hardhat.config.ts adds it unless defined there by hand.
+    network: { name: string; rpcUrlEnv: string; defaultRpcUrl: string; eid: number }
+    // Optional explorer for verification (hardhat-etherscan customChains entry).
+    explorer?: { network: string; apiURL: string; browserURL: string; apiKeyEnv: string }
     mintLowSafe: string
     mintHighSafe: string
     proxyAdminOwner: string
@@ -32,9 +36,22 @@ const HIGH_MINTER_ROLE = ethers.utils.id('HIGH_MINTER_ROLE')
 const ADMIN_SLOT = '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
 const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'
 
+const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
+
 export function readWtariConfig(chainId: number): WtariChainConfig {
-    const file = path.join(__dirname, '..', 'deploy', 'wtari', `${chainId}.json`)
-    return JSON.parse(fs.readFileSync(file, 'utf8'))
+    return JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, `${chainId}.json`), 'utf8'))
+}
+
+/** Every deploy/wtari/<chainId>.json, as [chainId, config] pairs. */
+export function listWtariConfigs(): [number, WtariChainConfig][] {
+    const configs: [number, WtariChainConfig][] = []
+    for (const file of fs.readdirSync(CONFIG_DIR)) {
+        if (file.endsWith('.json')) {
+            const chainId = Number(path.basename(file, '.json'))
+            configs.push([chainId, readWtariConfig(chainId)])
+        }
+    }
+    return configs
 }
 
 async function checkHasCode(provider: providers.Provider, label: string, address: string) {
@@ -153,13 +170,21 @@ export async function deployWtari(
         },
     })
 
-    // The deployer only holds token admin until this setup is done; skip it on re-runs.
-    if (await read('wTARI', 'hasRole', DEFAULT_ADMIN_ROLE, deployer)) {
-        const opts = { from: deployer, log: true, waitConfirmations: config.confirmations }
+    // Hand the token over to proxyAdminOwner. Each step is skipped when already done, so a re-run
+    // finishes an interrupted handover.
+    const opts = { from: deployer, log: true, waitConfirmations: config.confirmations }
+    if (!(await read('wTARI', 'hasRole', MINTER_ROLE, controller.address))) {
         await execute('wTARI', opts, 'grantRole', MINTER_ROLE, controller.address)
+    }
+    if (!(await read('wTARI', 'hasRole', DEFAULT_ADMIN_ROLE, config.proxyAdminOwner))) {
         await execute('wTARI', opts, 'grantRole', DEFAULT_ADMIN_ROLE, config.proxyAdminOwner)
+    }
+    // setDelegate is safe to repeat; both need the deployer to still be owner.
+    if ((await read('wTARI', 'owner')).toLowerCase() === deployer.toLowerCase()) {
         await execute('wTARI', opts, 'setDelegate', config.proxyAdminOwner)
         await execute('wTARI', opts, 'transferOwnership', config.proxyAdminOwner)
+    }
+    if (await read('wTARI', 'hasRole', DEFAULT_ADMIN_ROLE, deployer)) {
         await execute('wTARI', opts, 'renounceRole', DEFAULT_ADMIN_ROLE, deployer)
     }
 
@@ -261,8 +286,8 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
         const rpcUrl = process.env[config.referenceRpcUrlEnv]
         if (!rpcUrl) throw new Error(`${config.referenceRpcUrlEnv} is not set`)
 
-        const eid = hre.network.config.eid as EndpointId
-        const { address: lzEndpoint } = getDeploymentAddressAndAbi(endpointIdToNetwork(eid), 'EndpointV2')
+        const lzNetwork = endpointIdToNetwork(config.network.eid as EndpointId)
+        const { address: lzEndpoint } = getDeploymentAddressAndAbi(lzNetwork, 'EndpointV2')
 
         await deployWtari(hre, config, lzEndpoint, new providers.JsonRpcProvider(rpcUrl))
         await checkWtariDeployment(hre, config)

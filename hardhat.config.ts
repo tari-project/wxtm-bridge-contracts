@@ -7,12 +7,13 @@ import '@layerzerolabs/toolbox-hardhat'
 import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
+import '@nomiclabs/hardhat-etherscan'
 import '@rumblefishdev/hardhat-kms-signer'
-import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
+import { HardhatUserConfig, HttpNetworkAccountsUserConfig, NetworksUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
-import './tasks/wtari'
+import { listWtariConfigs } from './tasks/wtari'
 
 /** @dev Uncomment below to use standard authentication method */
 // // Set your preferred authentication method
@@ -36,6 +37,72 @@ if (accounts == null) {
     )
 }
 
+const networks: NetworksUserConfig = {
+    /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
+    mainnet: {
+        eid: EndpointId.ETHEREUM_MAINNET,
+        url: process.env.MAINNET_RPC_URL || '',
+        kmsKeyId: process.env.KMS_KEY_ID,
+    },
+    'sepolia-testnet': {
+        eid: EndpointId.SEPOLIA_V2_TESTNET,
+        url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
+        kmsKeyId: process.env.KMS_KEY_ID,
+    },
+    'base-sepolia-testnet': {
+        eid: EndpointId.BASESEP_V2_TESTNET,
+        url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
+        accounts,
+    },
+    // 'optimism-testnet': {
+    //     eid: EndpointId.OPTSEP_V2_TESTNET,
+    //     url: process.env.RPC_URL_OP_SEPOLIA || 'https://optimism-sepolia.gateway.tenderly.co',
+    //     accounts,
+    // },
+    // 'avalanche-testnet': {
+    //     eid: EndpointId.AVALANCHE_V2_TESTNET,
+    //     url: process.env.RPC_URL_FUJI || 'https://avalanche-fuji.drpc.org',
+    //     accounts,
+    // },
+    // 'arbitrum-testnet': {
+    //     eid: EndpointId.ARBSEP_V2_TESTNET,
+    //     url: process.env.RPC_URL_ARB_SEPOLIA || 'https://arbitrum-sepolia.gateway.tenderly.co',
+    //     accounts,
+    // },
+    hardhat: {
+        // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
+        allowUnlimitedContractSize: true,
+        // Keep local dry-run deployments out of deployments/
+        saveDeployments: false,
+    },
+}
+
+const etherscanApiKey: { [network: string]: string } = {
+    mainnet: process.env.ETHERSCAN_API_KEY || '',
+    sepolia: process.env.ETHERSCAN_API_KEY || '',
+}
+const etherscanCustomChains: { network: string; chainId: number; urls: { apiURL: string; browserURL: string } }[] = []
+
+// Each deploy/wtari/<chainId>.json brings its own network (unless defined above) and explorer.
+for (const [chainId, wtari] of listWtariConfigs()) {
+    if (!networks[wtari.network.name]) {
+        networks[wtari.network.name] = {
+            eid: wtari.network.eid as EndpointId,
+            url: process.env[wtari.network.rpcUrlEnv] || wtari.network.defaultRpcUrl,
+            accounts,
+            kmsKeyId: process.env.KMS_KEY_ID,
+        }
+    }
+    if (wtari.explorer) {
+        etherscanApiKey[wtari.explorer.network] = process.env[wtari.explorer.apiKeyEnv] || ''
+        etherscanCustomChains.push({
+            network: wtari.explorer.network,
+            chainId,
+            urls: { apiURL: wtari.explorer.apiURL, browserURL: wtari.explorer.browserURL },
+        })
+    }
+}
+
 const config: HardhatUserConfig = {
     paths: {
         cache: 'cache/hardhat',
@@ -53,77 +120,14 @@ const config: HardhatUserConfig = {
             },
         ],
     },
-    networks: {
-        /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
-        mainnet: {
-            eid: EndpointId.ETHEREUM_MAINNET,
-            url: process.env.MAINNET_RPC_URL || '',
-            kmsKeyId: process.env.KMS_KEY_ID,
-        },
-        'sepolia-testnet': {
-            eid: EndpointId.SEPOLIA_V2_TESTNET,
-            url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
-            kmsKeyId: process.env.KMS_KEY_ID,
-        },
-        'base-sepolia-testnet': {
-            eid: EndpointId.BASESEP_V2_TESTNET,
-            url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
-            accounts,
-        },
-        'base-mainnet': {
-            eid: EndpointId.BASE_V2_MAINNET,
-            url: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
-            kmsKeyId: process.env.KMS_KEY_ID,
-        },
-        // 'optimism-testnet': {
-        //     eid: EndpointId.OPTSEP_V2_TESTNET,
-        //     url: process.env.RPC_URL_OP_SEPOLIA || 'https://optimism-sepolia.gateway.tenderly.co',
-        //     accounts,
-        // },
-        // 'avalanche-testnet': {
-        //     eid: EndpointId.AVALANCHE_V2_TESTNET,
-        //     url: process.env.RPC_URL_FUJI || 'https://avalanche-fuji.drpc.org',
-        //     accounts,
-        // },
-        // 'arbitrum-testnet': {
-        //     eid: EndpointId.ARBSEP_V2_TESTNET,
-        //     url: process.env.RPC_URL_ARB_SEPOLIA || 'https://arbitrum-sepolia.gateway.tenderly.co',
-        //     accounts,
-        // },
-        hardhat: {
-            // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
-            allowUnlimitedContractSize: true,
-            // Keep local dry-run deployments out of deployments/
-            saveDeployments: false,
-        },
-    },
+    networks,
     typechain: {
         outDir: 'typechain',
         target: 'ethers-v5',
     },
     etherscan: {
-        apiKey: {
-            mainnet: process.env.ETHERSCAN_API_KEY || '',
-            sepolia: process.env.ETHERSCAN_API_KEY || '',
-            base: process.env.BASESCAN_API_KEY || '',
-            baseSepolia: process.env.BASESCAN_API_KEY || '',
-        },
-        customChains: [
-            {
-                network: 'base',
-                chainId: 8453,
-                urls: { apiURL: 'https://api.basescan.org/api', browserURL: 'https://basescan.org' },
-            },
-            {
-                network: 'baseSepolia',
-                chainId: 84532,
-                urls: { apiURL: 'https://api-sepolia.basescan.org/api', browserURL: 'https://sepolia.basescan.org' },
-            },
-        ],
-    },
-    sourcify: {
-        // Disabled by default -> Doesn't need an API key
-        enabled: true,
+        apiKey: etherscanApiKey,
+        customChains: etherscanCustomChains,
     },
     namedAccounts: {
         deployer: {

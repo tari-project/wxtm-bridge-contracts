@@ -21,7 +21,7 @@ export type DeployedChain = DeployedChains
 
 const allDeployments = deployments as { [chainId: string]: { [name: string]: string | number } | undefined }
 
-export function getDeployments(chainId: DeployedChain): Deployments {
+export function getDeployments(chainId: DeployedChain | number): Deployments {
     const dep = allDeployments[chainId] ?? {}
 
     return {
