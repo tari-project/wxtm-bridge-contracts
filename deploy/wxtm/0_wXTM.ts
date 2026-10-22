@@ -1,7 +1,7 @@
 import { type DeployFunction } from 'hardhat-deploy/types'
 
 import assert from 'assert'
-import verify from '../utils/verify'
+import verify from '../../utils/verify'
 import { ethers } from 'hardhat'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'

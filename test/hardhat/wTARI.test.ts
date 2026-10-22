@@ -1,12 +1,22 @@
 import fs from 'fs'
+import http from 'http'
+import { AddressInfo } from 'net'
 import path from 'path'
 
 import { SignerWithAddress } from '@nomiclabs/hardhat-ethers/signers'
 import { expect } from 'chai'
 import { Contract, ContractFactory } from 'ethers'
 import hre, { deployments, ethers } from 'hardhat'
+import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 
-import { WtariChainConfig, checkWtariDeployment, deployWtari, readWtariConfig } from '../../tasks/wtari'
+import {
+    WtariChainConfig,
+    checkWtariDeployment,
+    deployWtari,
+    etherscanVerify,
+    readWtariConfig,
+    verifyWtariContracts,
+} from '../../tasks/wtari'
 import { getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const ROOT = path.join(__dirname, '..', '..')
@@ -38,6 +48,58 @@ describe('wTARI clones', function () {
             expect(cloneText).to.equal(sourceText.replace(/wXTM/g, 'wTARI').replace(/wxtm/g, 'wtari'))
         })
     }
+})
+
+describe('wTARI config files', function () {
+    it('are not picked up by the hardhat-deploy script loader', function () {
+        const scripts = traverseMultipleDirectory(hre.config.paths.deploy)
+        expect(scripts.length).to.be.greaterThan(0)
+        for (const script of scripts) {
+            expect(script).to.not.include(path.join('deploy', 'wtari'))
+            expect(script.endsWith('.ts')).to.equal(true)
+        }
+    })
+
+    it('point the Base explorers at the Etherscan V2 API', function () {
+        for (const chainId of [84532, 8453]) {
+            const explorer = readWtariConfig(chainId).explorer
+            expect(explorer?.apiURL).to.equal(`https://api.etherscan.io/v2/api?chainid=${chainId}`)
+            expect(explorer?.apiKeyEnv).to.equal('ETHERSCAN_API_KEY')
+        }
+    })
+})
+
+// Local stand-in for the Etherscan V2 API: records request URLs and answers with the given bodies.
+async function startExplorerStub(submitReply: object, statusReply: object) {
+    const urls: string[] = []
+    const server = http.createServer((req, res) => {
+        urls.push(`${req.method} ${req.url}`)
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify(req.method === 'POST' ? submitReply : statusReply))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const apiURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v2/api?chainid=84532`
+    return { server, urls, apiURL }
+}
+
+describe('Etherscan V2 verification', function () {
+    it('submits and polls with the chainid query kept', async function () {
+        const stub = await startExplorerStub(
+            { status: '1', result: 'guid-1' },
+            { status: '1', result: 'Pass - Verified' }
+        )
+        await etherscanVerify(stub.apiURL, 'key', { contractaddress: '0x01' })
+        stub.server.close()
+
+        expect(stub.urls[0]).to.equal('POST /v2/api?chainid=84532')
+        expect(stub.urls[1]).to.match(/^GET \/v2\/api\?chainid=84532&.*action=checkverifystatus.*guid=guid-1/)
+    })
+
+    it('throws when the explorer rejects the submission', async function () {
+        const stub = await startExplorerStub({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }, {})
+        await expectRejection(etherscanVerify(stub.apiURL, 'key', {}), 'submit failed: NOTOK Invalid API Key')
+        stub.server.close()
+    })
 })
 
 describe('deploy:wtari dry run', function () {
@@ -146,6 +208,33 @@ describe('deploy:wtari dry run', function () {
         await checkWtariDeployment(hre, config)
         expect(await token.owner()).to.equal(adminSafe.address)
         expect(await token.hasRole(adminRole, deployer.address)).to.equal(false)
+    })
+
+    it('verifyWtariContracts fails loudly, listing every unverified contract', async function () {
+        const stub = await startExplorerStub({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }, {})
+        process.env.WTARI_TEST_EXPLORER_KEY = 'key'
+        const explorer = { apiURL: stub.apiURL, browserURL: 'http://explorer', apiKeyEnv: 'WTARI_TEST_EXPLORER_KEY' }
+        let message = ''
+        try {
+            await verifyWtariContracts(hre, { ...config, explorer })
+        } catch (e) {
+            message = (e as Error).message
+        }
+        stub.server.close()
+        delete process.env.WTARI_TEST_EXPLORER_KEY
+
+        expect(message).to.include('Deployment is complete but these contracts are not verified')
+        for (const name of [
+            'wTARI_Implementation',
+            'wTARIController_Implementation',
+            'wTARIBridge_Implementation',
+            'wTARI_Proxy',
+            'wTARIController_Proxy',
+            'wTARIBridge_Proxy',
+            'wTARIProxyAdmin',
+        ]) {
+            expect(message).to.include(name)
+        }
     })
 
     it('initializers cannot be re-run', async function () {

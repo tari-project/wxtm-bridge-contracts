@@ -77,14 +77,8 @@ const networks: NetworksUserConfig = {
     },
 }
 
-const etherscanApiKey: { [network: string]: string } = {
-    mainnet: process.env.ETHERSCAN_API_KEY || '',
-    sepolia: process.env.ETHERSCAN_API_KEY || '',
-}
-const etherscanCustomChains: { network: string; chainId: number; urls: { apiURL: string; browserURL: string } }[] = []
-
-// Each deploy/wtari/<chainId>.json brings its own network (unless defined above) and explorer.
-for (const [chainId, wtari] of listWtariConfigs()) {
+// Each deploy/wtari/<chainId>.json brings its own network unless it is defined above.
+for (const [, wtari] of listWtariConfigs()) {
     if (!networks[wtari.network.name]) {
         networks[wtari.network.name] = {
             eid: wtari.network.eid as EndpointId,
@@ -93,19 +87,13 @@ for (const [chainId, wtari] of listWtariConfigs()) {
             kmsKeyId: process.env.KMS_KEY_ID,
         }
     }
-    if (wtari.explorer) {
-        etherscanApiKey[wtari.explorer.network] = process.env[wtari.explorer.apiKeyEnv] || ''
-        etherscanCustomChains.push({
-            network: wtari.explorer.network,
-            chainId,
-            urls: { apiURL: wtari.explorer.apiURL, browserURL: wtari.explorer.browserURL },
-        })
-    }
 }
 
 const config: HardhatUserConfig = {
     paths: {
         cache: 'cache/hardhat',
+        // hardhat-deploy loads every file under this folder; deploy/wtari holds JSON configs only.
+        deploy: 'deploy/wxtm',
     },
     solidity: {
         compilers: [
@@ -126,8 +114,7 @@ const config: HardhatUserConfig = {
         target: 'ethers-v5',
     },
     etherscan: {
-        apiKey: etherscanApiKey,
-        customChains: etherscanCustomChains,
+        apiKey: process.env.ETHERSCAN_API_KEY,
     },
     namedAccounts: {
         deployer: {

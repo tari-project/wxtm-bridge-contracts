@@ -9,13 +9,11 @@ import ProxyAdmin from 'hardhat-deploy/extendedArtifacts/ProxyAdmin.json'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import verify from '../utils/verify'
-
 export interface WtariChainConfig {
     // Hardhat network for this chain; hardhat.config.ts adds it unless defined there by hand.
     network: { name: string; rpcUrlEnv: string; defaultRpcUrl: string; eid: number }
-    // Optional explorer for verification (hardhat-etherscan customChains entry).
-    explorer?: { network: string; apiURL: string; browserURL: string; apiKeyEnv: string }
+    // Etherscan V2 explorer used by verify:wtari (apiURL includes ?chainid=<id>).
+    explorer?: { apiURL: string; browserURL: string; apiKeyEnv: string }
     mintLowSafe: string
     mintHighSafe: string
     proxyAdminOwner: string
@@ -191,12 +189,6 @@ export async function deployWtari(
     console.log(`wTARI: ${token.address} (implementation ${token.implementation})`)
     console.log(`wTARIController: ${controller.address} (implementation ${controller.implementation})`)
     console.log(`wTARIBridge: ${bridge.address} (implementation ${bridge.implementation})`)
-
-    if (hre.network.name !== 'hardhat') {
-        await verify(hre, token.implementation as string, [lzEndpoint])
-        await verify(hre, controller.implementation as string, [])
-        await verify(hre, bridge.implementation as string, [])
-    }
 }
 
 /** Post-deploy review: role grants, code at every role holder, and proxy admin/implementation slots. */
@@ -270,6 +262,89 @@ export async function checkWtariDeployment(hre: HardhatRuntimeEnvironment, confi
     console.log('wTARI deployment check passed')
 }
 
+// Every contract deploy:wtari creates, by hardhat-deploy record name.
+const VERIFY_NAMES = [
+    'wTARI_Implementation',
+    'wTARIController_Implementation',
+    'wTARIBridge_Implementation',
+    'wTARI_Proxy',
+    'wTARIController_Proxy',
+    'wTARIBridge_Proxy',
+    PROXY_ADMIN_NAME,
+]
+
+/** Submit one standard-JSON verification to an Etherscan V2 endpoint and wait for the result. */
+export async function etherscanVerify(apiURL: string, apiKey: string, form: { [key: string]: string }) {
+    const body = new URLSearchParams({ apikey: apiKey, module: 'contract', action: 'verifysourcecode', ...form })
+    const submitted = await (await fetch(apiURL, { method: 'POST', body })).json()
+    if (String(submitted.result).toLowerCase().includes('already verified')) return
+    if (submitted.status !== '1') {
+        throw new Error(`submit failed: ${submitted.message} ${submitted.result}`)
+    }
+
+    const statusUrl = new URL(apiURL)
+    statusUrl.searchParams.set('apikey', apiKey)
+    statusUrl.searchParams.set('module', 'contract')
+    statusUrl.searchParams.set('action', 'checkverifystatus')
+    statusUrl.searchParams.set('guid', submitted.result)
+    for (;;) {
+        const status = await (await fetch(statusUrl)).json()
+        if (String(status.result).toLowerCase().includes('already verified')) return
+        if (status.result !== 'Pending in queue') {
+            if (status.status === '1') return
+            throw new Error(`verification failed: ${status.result}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+    }
+}
+
+/** Verify all wTARI contracts; throws listing every contract that is not verified. */
+export async function verifyWtariContracts(hre: HardhatRuntimeEnvironment, config: WtariChainConfig) {
+    if (!config.explorer) throw new Error('No explorer configured for this chain')
+    const apiKey = process.env[config.explorer.apiKeyEnv]
+    if (!apiKey) throw new Error(`${config.explorer.apiKeyEnv} is not set`)
+
+    const unverified: string[] = []
+    for (const name of VERIFY_NAMES) {
+        const deployment = await hre.deployments.get(name)
+        try {
+            const metadata = JSON.parse(deployment.metadata as string)
+            const [sourceName, contractName] = Object.entries(metadata.settings.compilationTarget)[0] as [
+                string,
+                string,
+            ]
+            const solcInputFile = path.join(
+                hre.config.paths.deployments,
+                hre.network.name,
+                'solcInputs',
+                `${deployment.solcInputHash}.json`
+            )
+            const constructor = deployment.abi.find((item) => item.type === 'constructor')
+            const constructorArgs = constructor
+                ? ethers.utils.defaultAbiCoder.encode(constructor.inputs, deployment.args ?? []).slice(2)
+                : ''
+
+            await etherscanVerify(config.explorer.apiURL, apiKey, {
+                contractaddress: deployment.address,
+                sourceCode: fs.readFileSync(solcInputFile, 'utf8'),
+                codeformat: 'solidity-standard-json-input',
+                contractname: `${sourceName}:${contractName}`,
+                compilerversion: `v${metadata.compiler.version}`,
+                constructorArguements: constructorArgs,
+            })
+            console.log(`verified ${name} ${config.explorer.browserURL}/address/${deployment.address}`)
+        } catch (e) {
+            unverified.push(`${name} ${deployment.address}: ${(e as Error).message}`)
+        }
+    }
+
+    if (unverified.length > 0) {
+        throw new Error(
+            `Deployment is complete but these contracts are not verified (re-run verify:wtari):\n${unverified.join('\n')}`
+        )
+    }
+}
+
 async function assertChain(hre: HardhatRuntimeEnvironment, chain: number) {
     const chainId = Number(await hre.getChainId())
     if (chainId !== chain) {
@@ -291,6 +366,16 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
 
         await deployWtari(hre, config, lzEndpoint, new providers.JsonRpcProvider(rpcUrl))
         await checkWtariDeployment(hre, config)
+        if (hre.network.name !== 'hardhat') {
+            await verifyWtariContracts(hre, config)
+        }
+    })
+
+task('verify:wtari', 'Verify all wTARI contracts on the chain explorer (Etherscan V2)')
+    .addParam('chain', 'Target chain id (must match --network)', undefined, types.int)
+    .setAction(async ({ chain }: { chain: number }, hre) => {
+        await assertChain(hre, chain)
+        await verifyWtariContracts(hre, readWtariConfig(chain))
     })
 
 task('check:wtari', 'Check wTARI role grants and proxy admin on the --network chain')

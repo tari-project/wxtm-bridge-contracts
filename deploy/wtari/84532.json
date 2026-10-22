@@ -6,10 +6,9 @@
     "eid": 40245
   },
   "explorer": {
-    "network": "baseSepolia",
-    "apiURL": "https://api-sepolia.basescan.org/api",
+    "apiURL": "https://api.etherscan.io/v2/api?chainid=84532",
     "browserURL": "https://sepolia.basescan.org",
-    "apiKeyEnv": "BASESCAN_API_KEY"
+    "apiKeyEnv": "ETHERSCAN_API_KEY"
   },
   "mintLowSafe": "0x0000000000000000000000000000000000000000",
   "mintHighSafe": "0x0000000000000000000000000000000000000000",
