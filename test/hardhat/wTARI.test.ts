@@ -18,9 +18,10 @@ import {
     readWtariConfig,
     verifyWtariContracts,
 } from '../../tasks/wtari'
-import { getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
+import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const ROOT = path.join(__dirname, '..', '..')
+const SAFE_SINGLETON = '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762'
 const OOTLE_ADDRESS =
     'otl_esm_1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7v9kn6'
 
@@ -34,6 +35,68 @@ async function expectRejection(promise: Promise<unknown>, message: string) {
     expect(error?.message).to.include(message)
 }
 
+// The only intentional differences from the renamed wXTM sources: the controller's daily low-tier budget (D14)
+// and the bridge's target address check (D17). Each [from, to] pair must match exactly once.
+const INTENTIONAL_DIFFS: { [clone: string]: [string, string][] } = {
+    'wTARIController.sol': [
+        [
+            '    error UnauthorizedToMintThisAmount();\n',
+            '    error UnauthorizedToMintThisAmount();\n    error LowMintDailyLimitExceeded();\n\n    event LowMintDailyLimitSet(uint256 limit);\n',
+        ],
+        [
+            '    IwTARI private wtari;\n',
+            '    IwTARI private wtari;\n\n    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days).\n' +
+                '    uint256 public lowMintDailyLimit;\n    uint256 public lowMintWindow;\n    uint256 public lowMintedInWindow;\n',
+        ],
+        [
+            '    function initialize(address _wtari, address lowMinter, address highMinter, address admin) external initializer {\n',
+            '    function initialize(\n        address _wtari,\n        address lowMinter,\n        address highMinter,\n' +
+                '        address admin,\n        uint256 _lowMintDailyLimit\n    ) external initializer {\n',
+        ],
+        [
+            '        wtari = IwTARI(_wtari);\n    }\n',
+            '        wtari = IwTARI(_wtari);\n\n        lowMintDailyLimit = _lowMintDailyLimit;\n' +
+                '        emit LowMintDailyLimitSet(_lowMintDailyLimit);\n    }\n\n' +
+                '    function setLowMintDailyLimit(uint256 limit) external onlyRole(DEFAULT_ADMIN_ROLE) {\n' +
+                '        lowMintDailyLimit = limit;\n        emit LowMintDailyLimitSet(limit);\n    }\n',
+        ],
+        [
+            '        if (amount > HIGH_MINT_THRESHOLD) revert UnauthorizedToMintThisAmount();\n',
+            '        if (amount > HIGH_MINT_THRESHOLD) revert UnauthorizedToMintThisAmount();\n\n' +
+                '        uint256 window = block.timestamp / 1 days;\n        if (window != lowMintWindow) {\n' +
+                '            lowMintWindow = window;\n            lowMintedInWindow = 0;\n        }\n' +
+                '        if (lowMintedInWindow + amount > lowMintDailyLimit) revert LowMintDailyLimitExceeded();\n' +
+                '        lowMintedInWindow += amount;\n',
+        ],
+    ],
+    'wTARIBridge.sol': [
+        [
+            '    error InsufficientAmount();\n',
+            '    error InsufficientAmount();\n    error InvalidTargetTariAddress();\n\n' +
+                '    uint256 private constant MAX_TARGET_TARI_ADDRESS_LENGTH = 128;\n',
+        ],
+        [
+            '    function bridgeToTari(string memory targetTariAddress, uint256 value) external {\n' +
+                '        if (value < 1000 ether) revert InsufficientAmount();\n',
+            '    function bridgeToTari(string memory targetTariAddress, uint256 value) external {\n' +
+                '        if (value < 1000 ether) revert InsufficientAmount();\n        _checkTargetTariAddress(targetTariAddress);\n',
+        ],
+        [
+            '        bytes32 s\n    ) external {\n        if (value < 1000 ether) revert InsufficientAmount();\n',
+            '        bytes32 s\n    ) external {\n        if (value < 1000 ether) revert InsufficientAmount();\n' +
+                '        _checkTargetTariAddress(targetTariAddress);\n',
+        ],
+        [
+            '        nonce++;\n    }\n}\n',
+            '        nonce++;\n    }\n\n' +
+                '    function _checkTargetTariAddress(string memory targetTariAddress) private pure {\n' +
+                '        uint256 length = bytes(targetTariAddress).length;\n' +
+                '        if (length == 0 || length > MAX_TARGET_TARI_ADDRESS_LENGTH) revert InvalidTargetTariAddress();\n' +
+                '    }\n}\n',
+        ],
+    ],
+}
+
 describe('wTARI clones', function () {
     const pairs = [
         ['wXTM.sol', 'wTARI.sol'],
@@ -43,10 +106,16 @@ describe('wTARI clones', function () {
     ]
 
     for (const [source, clone] of pairs) {
-        it(`${clone} differs from ${source} by names only`, function () {
-            const sourceText = fs.readFileSync(path.join(ROOT, 'contracts', source), 'utf8')
-            const cloneText = fs.readFileSync(path.join(ROOT, 'contracts', clone), 'utf8')
-            expect(cloneText).to.equal(sourceText.replace(/wXTM/g, 'wTARI').replace(/wxtm/g, 'wtari'))
+        it(`${clone} differs from ${source} by names and the listed intentional changes only`, function () {
+            let expected = fs
+                .readFileSync(path.join(ROOT, 'contracts', source), 'utf8')
+                .replace(/wXTM/g, 'wTARI')
+                .replace(/wxtm/g, 'wtari')
+            for (const [from, to] of INTENTIONAL_DIFFS[clone] ?? []) {
+                expect(expected.split(from).length, `exactly one match for: ${from}`).to.equal(2)
+                expected = expected.replace(from, to)
+            }
+            expect(fs.readFileSync(path.join(ROOT, 'contracts', clone), 'utf8')).to.equal(expected)
         })
     }
 })
@@ -71,7 +140,29 @@ describe('wTARI config files', function () {
         for (const chainId of [84532, 8453]) {
             const explorer = readWtariConfig(chainId).explorer
             expect(explorer?.apiURL).to.equal(`https://api.etherscan.io/v2/api?chainid=${chainId}`)
-            expect(explorer?.apiKeyEnv).to.equal('ETHERSCAN_API_KEY')
+        }
+        expect(readWtariConfig(8453).production).to.equal(true)
+        expect(readWtariConfig(84532).production).to.equal(false)
+    })
+
+    it('reject env var names and explorer hosts that could leak secrets', function () {
+        const file = path.join(ROOT, 'deploy', 'wtari', '999999.json')
+        const base = readWtariConfig(84532)
+        const cases: [object, string][] = [
+            [{ ...base, referenceRpcUrlEnv: 'PRIVATE_KEY' }, 'RPC env var PRIVATE_KEY must match'],
+            [{ ...base, network: { ...base.network, rpcUrlEnv: 'KMS_KEY_ID' } }, 'RPC env var KMS_KEY_ID must match'],
+            [
+                { ...base, explorer: { apiURL: 'https://evil.example/v2/api', browserURL: '' } },
+                'explorer.apiURL must be on api.etherscan.io',
+            ],
+        ]
+        try {
+            for (const [bad, message] of cases) {
+                fs.writeFileSync(file, JSON.stringify(bad))
+                expect(() => readWtariConfig(999999)).to.throw(message)
+            }
+        } finally {
+            fs.rmSync(file, { force: true })
         }
     })
 })
@@ -123,28 +214,42 @@ describe('deploy:wtari dry run', function () {
     before(async function () {
         ;[deployer, safeOwner, user] = await ethers.getSigners()
 
-        const endpointArtifact = await deployments.getArtifact('EndpointV2Mock')
-        endpoint = await new ContractFactory(endpointArtifact.abi, endpointArtifact.bytecode, deployer).deploy(1)
+        // This EndpointV2Mock keeps a public `delegates` mapping like the real EndpointV2.
+        const endpointArtifact = JSON.parse(
+            fs.readFileSync(
+                path.join(
+                    ROOT,
+                    'node_modules/@layerzerolabs/oapp-evm/artifacts/EndpointV2Mock.sol/EndpointV2Mock.json'
+                ),
+                'utf8'
+            )
+        )
+        endpoint = await new ContractFactory(endpointArtifact.abi, endpointArtifact.bytecode.object, deployer).deploy(
+            1,
+            deployer.address
+        )
 
         // SafeMock is a test-only contract, so it is compiled by forge rather than hardhat.
         const safeArtifact = JSON.parse(fs.readFileSync(path.join(ROOT, 'out/SafeMock.sol/SafeMock.json'), 'utf8'))
         safeFactory = new ContractFactory(safeArtifact.abi, safeArtifact.bytecode.object, deployer)
 
         const owners = [safeOwner.address, user.address]
-        const referenceLowSafe = await safeFactory.deploy(owners, 2)
-        const referenceHighSafe = await safeFactory.deploy(owners, 2)
-        lowSafe = await safeFactory.deploy([user.address, safeOwner.address], 2)
-        highSafe = await safeFactory.deploy(owners, 2)
-        adminSafe = await safeFactory.deploy(owners, 2)
+        const referenceLowSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        const referenceHighSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        lowSafe = await safeFactory.deploy(SAFE_SINGLETON, [user.address, safeOwner.address], 2)
+        highSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        adminSafe = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
 
         config = {
-            network: { name: 'hardhat', rpcUrlEnv: 'UNUSED', defaultRpcUrl: '', eid: 1 },
+            network: { name: 'hardhat', rpcUrlEnv: 'UNUSED_RPC_URL', defaultRpcUrl: '', eid: 1 },
+            production: false,
+            lowMintDailyLimit: 500000,
             mintLowSafe: lowSafe.address,
             mintHighSafe: highSafe.address,
             proxyAdminOwner: adminSafe.address,
             confirmations: 1,
             referenceChainId: 31337,
-            referenceRpcUrlEnv: 'UNUSED',
+            referenceRpcUrlEnv: 'UNUSED_RPC_URL',
             referenceMintLowSafe: referenceLowSafe.address,
             referenceMintHighSafe: referenceHighSafe.address,
         }
@@ -161,11 +266,44 @@ describe('deploy:wtari dry run', function () {
     })
 
     it('rejects a Safe whose owners differ from the reference Safe', async function () {
-        const otherSafe = await safeFactory.deploy([user.address], 1)
+        const otherSafe = await safeFactory.deploy(SAFE_SINGLETON, [user.address], 1)
         const badConfig = { ...config, mintHighSafe: otherSafe.address }
         await expectRejection(
             deployWtari(hre, badConfig, endpoint.address, ethers.provider),
             'owners differ from reference Safe'
+        )
+    })
+
+    it('rejects Safes with modules, a guard, a non-canonical singleton, or one Safe for both tiers', async function () {
+        const owners = [safeOwner.address, user.address]
+        const withModule = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        await withModule.addModule(user.address)
+        await expectRejection(
+            deployWtari(hre, { ...config, mintHighSafe: withModule.address }, endpoint.address, ethers.provider),
+            'has modules enabled'
+        )
+
+        const withGuard = await safeFactory.deploy(SAFE_SINGLETON, owners, 2)
+        const guardSlot = ethers.utils.id('guard_manager.guard.address')
+        await ethers.provider.send('hardhat_setStorageAt', [
+            withGuard.address,
+            guardSlot,
+            ethers.utils.hexZeroPad(user.address, 32),
+        ])
+        await expectRejection(
+            deployWtari(hre, { ...config, proxyAdminOwner: withGuard.address }, endpoint.address, ethers.provider),
+            'has a transaction guard set'
+        )
+
+        const fakeSingleton = await safeFactory.deploy(user.address, owners, 2)
+        await expectRejection(
+            deployWtari(hre, { ...config, mintHighSafe: fakeSingleton.address }, endpoint.address, ethers.provider),
+            'is not a canonical Safe singleton'
+        )
+
+        await expectRejection(
+            deployWtari(hre, { ...config, mintHighSafe: lowSafe.address }, endpoint.address, ethers.provider),
+            'mintLowSafe and mintHighSafe must be different Safes'
         )
     })
 
@@ -179,7 +317,7 @@ describe('deploy:wtari dry run', function () {
 
     it('deploys, hands over admin, and passes the post-deploy check', async function () {
         await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config)
+        await checkWtariDeployment(hre, config, ethers.provider)
 
         const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
         expect(await token.symbol()).to.equal('wTARI')
@@ -189,7 +327,7 @@ describe('deploy:wtari dry run', function () {
 
         // A second run is a no-op rather than a failure.
         await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config)
+        await checkWtariDeployment(hre, config, ethers.provider)
     })
 
     it('a re-run finishes an interrupted handover', async function () {
@@ -201,7 +339,7 @@ describe('deploy:wtari dry run', function () {
             .connect(safeOwner)
             .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
         await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config)
+        await checkWtariDeployment(hre, config, ethers.provider)
 
         // Died after setDelegate, before transferOwnership: the deployer is still owner and admin.
         await adminSafe
@@ -212,15 +350,70 @@ describe('deploy:wtari dry run', function () {
             .exec(token.address, token.interface.encodeFunctionData('transferOwnership', [deployer.address]))
         expect(await token.owner()).to.equal(deployer.address)
         await deployWtari(hre, config, endpoint.address, ethers.provider)
-        await checkWtariDeployment(hre, config)
+        await checkWtariDeployment(hre, config, ethers.provider)
         expect(await token.owner()).to.equal(adminSafe.address)
         expect(await token.hasRole(adminRole, deployer.address)).to.equal(false)
     })
 
+    it('uses the recorded deployer, not the current signer, for the handover and the check', async function () {
+        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
+        const adminRole = ethers.constants.HashZero
+        const getNamedAccounts = hre.getNamedAccounts
+        await adminSafe
+            .connect(safeOwner)
+            .exec(token.address, token.interface.encodeFunctionData('grantRole', [adminRole, deployer.address]))
+
+        // Another key runs the tasks while the original deployer still holds admin.
+        hre.getNamedAccounts = async () => ({ deployer: user.address })
+        try {
+            await expectRejection(
+                deployWtari(hre, config, endpoint.address, ethers.provider),
+                `wTARI was deployed by ${deployer.address}, which still holds wTARI DEFAULT_ADMIN_ROLE`
+            )
+            await expectRejection(
+                checkWtariDeployment(hre, config, ethers.provider),
+                `deployer ${deployer.address} still holds wTARI DEFAULT_ADMIN_ROLE`
+            )
+        } finally {
+            hre.getNamedAccounts = getNamedAccounts
+        }
+
+        await deployWtari(hre, config, endpoint.address, ethers.provider)
+        await checkWtariDeployment(hre, config, ethers.provider)
+    })
+
+    it('check:wtari catches extra role holders, OFT peers and a moved LZ delegate', async function () {
+        const token = await ethers.getContractAt('wTARI', (await deployments.get('wTARI')).address)
+        const asSafe = (fn: string, args: unknown[]) =>
+            adminSafe.connect(safeOwner).exec(token.address, token.interface.encodeFunctionData(fn, args))
+        const minterRole = ethers.utils.id('MINTER_ROLE')
+
+        await asSafe('grantRole', [minterRole, user.address])
+        await expectRejection(
+            checkWtariDeployment(hre, config, ethers.provider),
+            `wTARI: unexpected MINTER_ROLE holder ${user.address.toLowerCase()}`
+        )
+        await asSafe('revokeRole', [minterRole, user.address])
+
+        await asSafe('setPeer', [2, ethers.utils.hexZeroPad(user.address, 32)])
+        await expectRejection(checkWtariDeployment(hre, config, ethers.provider), 'wTARI: OFT peer set for eid 2')
+        await asSafe('setPeer', [2, ethers.constants.HashZero])
+
+        await asSafe('setDelegate', [user.address])
+        await expectRejection(
+            checkWtariDeployment(hre, config, ethers.provider),
+            `wTARI: LayerZero delegate ${user.address} is not proxyAdminOwner`
+        )
+        await asSafe('setDelegate', [adminSafe.address])
+
+        await checkWtariDeployment(hre, config, ethers.provider)
+    })
+
     it('verifyWtariContracts fails loudly, listing every unverified contract', async function () {
         const stub = await startExplorerStub({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }, {})
-        process.env.WTARI_TEST_EXPLORER_KEY = 'key'
-        const explorer = { apiURL: stub.apiURL, browserURL: 'http://explorer', apiKeyEnv: 'WTARI_TEST_EXPLORER_KEY' }
+        const previousKey = process.env.ETHERSCAN_API_KEY
+        process.env.ETHERSCAN_API_KEY = 'key'
+        const explorer = { apiURL: stub.apiURL, browserURL: 'http://explorer' }
         let message = ''
         try {
             await verifyWtariContracts(hre, { ...config, explorer })
@@ -228,7 +421,7 @@ describe('deploy:wtari dry run', function () {
             message = (e as Error).message
         }
         stub.server.close()
-        delete process.env.WTARI_TEST_EXPLORER_KEY
+        process.env.ETHERSCAN_API_KEY = previousKey
 
         expect(message).to.include('Deployment is complete but these contracts are not verified')
         for (const name of [
@@ -254,7 +447,7 @@ describe('deploy:wtari dry run', function () {
 
         await expectRejection(token.initialize('x', 'x', '1', user.address), 'InvalidInitialization')
         await expectRejection(
-            controller.initialize(user.address, user.address, user.address, user.address),
+            controller.initialize(user.address, user.address, user.address, user.address, 1),
             'InvalidInitialization'
         )
         await expectRejection(bridge.initialize(user.address), 'InvalidInitialization')
@@ -317,5 +510,10 @@ describe('typechain package deployments', function () {
         expect(getDeployments(1).wTARI).to.equal(undefined)
         expect(getDeployments(11155111).wTARI).to.equal(undefined)
         expect(getDeployments(1).wXTM).to.equal('0xfD36fA88bb3feA8D1264fc89d70723b6a2B56958')
+
+        // Type-level: known chains keep wXTM required; other chain ids get optional fields.
+        const known: WagmiAddress = getDeployments(1).wXTM
+        const anyChain: WagmiAddress | undefined = getDeployments(getWtariChains()[0] ?? 8453).wXTM
+        expect(known).to.not.equal(anyChain)
     })
 })

@@ -11,6 +11,9 @@ contract wTARIBridge is Initializable {
     using SafeERC20 for IERC20;
 
     error InsufficientAmount();
+    error InvalidTargetTariAddress();
+
+    uint256 private constant MAX_TARGET_TARI_ADDRESS_LENGTH = 128;
 
     uint256 private nonce;
     address private wTARI;
@@ -27,6 +30,7 @@ contract wTARIBridge is Initializable {
 
     function bridgeToTari(string memory targetTariAddress, uint256 value) external {
         if (value < 1000 ether) revert InsufficientAmount();
+        _checkTargetTariAddress(targetTariAddress);
 
         IERC20(wTARI).safeTransferFrom(msg.sender, address(this), value);
 
@@ -48,6 +52,7 @@ contract wTARIBridge is Initializable {
         bytes32 s
     ) external {
         if (value < 1000 ether) revert InsufficientAmount();
+        _checkTargetTariAddress(targetTariAddress);
 
         IwTARI(wTARI).receiveWithAuthorization(
             msg.sender,
@@ -66,5 +71,10 @@ contract wTARIBridge is Initializable {
         emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
 
         nonce++;
+    }
+
+    function _checkTargetTariAddress(string memory targetTariAddress) private pure {
+        uint256 length = bytes(targetTariAddress).length;
+        if (length == 0 || length > MAX_TARGET_TARI_ADDRESS_LENGTH) revert InvalidTargetTariAddress();
     }
 }

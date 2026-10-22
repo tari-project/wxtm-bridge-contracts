@@ -7,9 +7,10 @@
   },
   "explorer": {
     "apiURL": "https://api.etherscan.io/v2/api?chainid=84532",
-    "browserURL": "https://sepolia.basescan.org",
-    "apiKeyEnv": "ETHERSCAN_API_KEY"
+    "browserURL": "https://sepolia.basescan.org"
   },
+  "production": false,
+  "lowMintDailyLimit": 500000,
   "mintLowSafe": "0x0000000000000000000000000000000000000000",
   "mintHighSafe": "0x0000000000000000000000000000000000000000",
   "proxyAdminOwner": "0x0000000000000000000000000000000000000000",

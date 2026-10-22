@@ -7,7 +7,6 @@ import '@layerzerolabs/toolbox-hardhat'
 import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
-import '@nomiclabs/hardhat-etherscan'
 import '@rumblefishdev/hardhat-kms-signer'
 import { HardhatUserConfig, HttpNetworkAccountsUserConfig, NetworksUserConfig } from 'hardhat/types'
 
@@ -89,7 +88,8 @@ for (const [, wtari] of listWtariConfigs()) {
     }
 }
 
-const config: HardhatUserConfig = {
+// `etherscan` is read by the hardhat-etherscan plugin that @openzeppelin/hardhat-upgrades loads (wXTM verify).
+const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
     paths: {
         cache: 'cache/hardhat',
         // hardhat-deploy loads every file under this folder; deploy/wtari holds JSON configs only.

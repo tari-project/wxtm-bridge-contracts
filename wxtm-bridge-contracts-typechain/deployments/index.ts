@@ -21,7 +21,10 @@ export type DeployedChain = DeployedChains
 
 const allDeployments = deployments as { [chainId: string]: { [name: string]: string | number } | undefined }
 
-export function getDeployments(chainId: DeployedChain | number): Deployments {
+// Known chains keep the required wXTM fields; any other chain id (e.g. from getWtariChains) may lack them.
+export function getDeployments(chainId: DeployedChain): Deployments
+export function getDeployments(chainId: number): Partial<Deployments>
+export function getDeployments(chainId: number): Partial<Deployments> {
     const dep = allDeployments[chainId] ?? {}
 
     return {

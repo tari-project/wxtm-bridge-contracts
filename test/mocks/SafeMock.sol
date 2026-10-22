@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-/// @dev Minimal stand-in for a Gnosis Safe: owners/threshold getters and an owner-only call forwarder.
+/// @dev Minimal stand-in for a Gnosis Safe proxy: singleton in slot 0, owners/threshold/modules getters
+/// and an owner-only call forwarder.
 contract SafeMock {
+    address private singleton;
     address[] private owners;
     uint256 private threshold;
+    address[] private modules;
 
-    constructor(address[] memory _owners, uint256 _threshold) {
+    constructor(address _singleton, address[] memory _owners, uint256 _threshold) {
+        singleton = _singleton;
         owners = _owners;
         threshold = _threshold;
     }
@@ -17,6 +21,15 @@ contract SafeMock {
 
     function getThreshold() external view returns (uint256) {
         return threshold;
+    }
+
+    function getModulesPaginated(address, uint256) external view returns (address[] memory, address) {
+        return (modules, address(1));
+    }
+
+    /// @dev Test helper; a real Safe only enables modules through a Safe transaction.
+    function addModule(address module) external {
+        modules.push(module);
     }
 
     function exec(address to, bytes calldata data) external returns (bytes memory) {
