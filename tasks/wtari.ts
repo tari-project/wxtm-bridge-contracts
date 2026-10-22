@@ -287,7 +287,9 @@ export async function etherscanVerify(apiURL: string, apiKey: string, form: { [k
     statusUrl.searchParams.set('module', 'contract')
     statusUrl.searchParams.set('action', 'checkverifystatus')
     statusUrl.searchParams.set('guid', submitted.result)
+    const deadline = Date.now() + 10 * 60 * 1000
     for (;;) {
+        if (Date.now() > deadline) throw new Error('verification still pending after 10 minutes')
         const status = await (await fetch(statusUrl)).json()
         if (String(status.result).toLowerCase().includes('already verified')) return
         if (status.result !== 'Pending in queue') {

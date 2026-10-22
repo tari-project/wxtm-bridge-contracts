@@ -9,6 +9,7 @@ import { Contract, ContractFactory } from 'ethers'
 import hre, { deployments, ethers } from 'hardhat'
 import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 
+import { networkForChain } from '../../scripts/wtari'
 import {
     WtariChainConfig,
     checkWtariDeployment,
@@ -58,6 +59,12 @@ describe('wTARI config files', function () {
             expect(script).to.not.include(path.join('deploy', 'wtari'))
             expect(script.endsWith('.ts')).to.equal(true)
         }
+    })
+
+    it('resolve the hardhat network for the npm run <task>:wtari wrapper', function () {
+        expect(networkForChain('84532')).to.equal('base-sepolia-testnet')
+        expect(networkForChain('8453')).to.equal('base-mainnet')
+        expect(() => networkForChain('1')).to.throw('No wTARI config for chain 1')
     })
 
     it('point the Base explorers at the Etherscan V2 API', function () {
