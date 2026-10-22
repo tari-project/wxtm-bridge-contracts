@@ -15,8 +15,13 @@ async function exportDeploymentsAddresses(path_directory: string) {
 
             return acc
         },
-        {} as { [key: string]: string }
+        {} as { [key: string]: string | number }
     )
+
+    // Consumers start indexing TokensUnwrapped from the bridge proxy's deployment block.
+    if (deployments.wTARIBridge?.receipt) {
+        deploymentsAddresses.wTARIBridgeStartBlock = deployments.wTARIBridge.receipt.blockNumber
+    }
 
     if (!fs.existsSync(path_directory)) {
         fs.mkdirSync(path_directory)
