@@ -19,6 +19,7 @@ import {
     officialLzEndpoint,
     readWtariConfig,
     safeSingletons,
+    uncheckedImmutables,
     verifyWtariContracts,
     withRedactedRpcUrls,
 } from '../../tasks/wtari'
@@ -161,6 +162,12 @@ describe('wTARI config files', function () {
             'LayerZero eid 40245 belongs to chain 84532, not chain 8453'
         )
         expect(() => officialLzEndpoint(40231, 421614)).to.throw('pin the endpoint for eid 40231 in tasks/wtari.ts')
+    })
+
+    it('flag immutables that check:wtari does not check through a getter', function () {
+        expect(uncheckedImmutables('wTARI', ['endpoint', 'decimalConversionRate'])).to.deep.equal([])
+        expect(uncheckedImmutables('wTARI', ['endpoint', 'rogue'])).to.deep.equal(['rogue'])
+        expect(uncheckedImmutables('wTARIBridge', ['anything'])).to.deep.equal(['anything'])
     })
 
     it('take the allowed Safe singletons for each chain from @safe-global/safe-deployments', function () {
@@ -454,8 +461,22 @@ describe('deploy:wtari dry run', function () {
 
         await expectRejection(
             checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address }),
-            'the controller does not have MINTER_ROLE yet; execute the pending Safe transaction'
+            `the controller does not have MINTER_ROLE yet; execute this Safe transaction from proxyAdminOwner: to ${pending?.to}, value 0, data ${pending?.data}`
         )
+
+        // Nothing can have been minted before the grant (ERC20Upgradeable's namespaced _totalSupply slot).
+        const totalSupplySlot = ethers.BigNumber.from(
+            '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00'
+        ).add(2)
+        await setStorage(token.address, totalSupplySlot.toHexString(), 1)
+        await expectRejection(
+            checkWtariDeployment(hre, config, ethers.provider, {
+                expectedLzEndpoint: endpoint.address,
+                preGrant: true,
+            }),
+            'wTARI: totalSupply 1 is not 0 before the controller holds MINTER_ROLE'
+        )
+        await setStorage(token.address, totalSupplySlot.toHexString(), 0)
         // What a Safe signer runs before signing: everything else must already pass.
         await checkWtariDeployment(hre, config, ethers.provider, {
             expectedLzEndpoint: endpoint.address,

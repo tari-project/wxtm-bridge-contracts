@@ -589,6 +589,19 @@ function declarationName(node: unknown, id: number): string | undefined {
     return undefined
 }
 
+function missingGrantMessage(tokenAddress: string, controllerAddress: string) {
+    const tx = minterGrantTransaction(tokenAddress, controllerAddress)
+    return (
+        `wTARI: the controller does not have MINTER_ROLE yet; execute this Safe transaction from proxyAdminOwner: ` +
+        `to ${tx.to}, value ${tx.value}, data ${tx.data} (${tx.description})`
+    )
+}
+
+/** Immutables of `contractName` that check:wtari does not check through a getter. */
+export function uncheckedImmutables(contractName: string, immutableNames: string[]) {
+    return immutableNames.filter((name) => !(CHECKED_IMMUTABLES[contractName] ?? []).includes(name))
+}
+
 /** Post-deploy review of Safes, roles, ownership, LZ config, bytecode and proxy slots. */
 export async function checkWtariDeployment(
     hre: HardhatRuntimeEnvironment,
@@ -643,7 +656,7 @@ export async function checkWtariDeployment(
         if (!(await read(name, 'hasRole', role, account))) {
             failures.push(
                 role === MINTER_ROLE
-                    ? `wTARI: the controller does not have MINTER_ROLE yet; execute the pending Safe transaction printed by deploy:wtari`
+                    ? missingGrantMessage(token.address, controller.address)
                     : `${name}: ${account} is missing ${ROLE_NAMES[role]}`
             )
         }
@@ -764,10 +777,8 @@ export async function checkWtariDeployment(
         }
         const compiled = await compiledContract(hre, contractName)
         // Immutables are masked in the comparison, so each one must be checked through its getter below.
-        for (const name of compiled.immutableNames) {
-            if (!(CHECKED_IMMUTABLES[contractName] ?? []).includes(name)) {
-                failures.push(`${contractName}: immutable ${name} is not checked by check:wtari`)
-            }
+        for (const name of uncheckedImmutables(contractName, compiled.immutableNames)) {
+            failures.push(`${contractName}: immutable ${name} is not checked by check:wtari`)
         }
         if (!(await sameRuntimeCode(provider, implementation, compiled.code, compiled.immutableReferences))) {
             failures.push(
@@ -1002,7 +1013,7 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
             // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
             await checkWtariDeployment(hre, config, referenceProvider, { preGrant: pending !== undefined })
-            if (hre.network.name !== 'hardhat') await verifyWtariContracts(hre, config)
+            // Printed before verification, which can fail on its own and must not hide this.
             if (pending) {
                 console.log(`Pending Safe transaction for proxyAdminOwner ${config.proxyAdminOwner}:`)
                 console.log(`  to:    ${pending.to}`)
@@ -1013,6 +1024,7 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
                     'Before signing, a Safe signer should run check:wtari --pre-grant, ideally on a second machine.'
                 )
             }
+            if (hre.network.name !== 'hardhat') await verifyWtariContracts(hre, config)
         })
     })
 
