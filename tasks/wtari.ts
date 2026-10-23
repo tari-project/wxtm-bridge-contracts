@@ -18,8 +18,8 @@ export interface WtariChainConfig {
     explorer?: { apiURL: string; browserURL: string }
     // Production chains must deploy with the KMS signer and an explicit RPC env var.
     production: boolean
-    // Initial wTARIController low-tier budget per fixed 24h window, in whole tokens.
-    lowMintDailyLimit: number
+    // Initial wTARIController low-tier budget per fixed 24h window: whole tokens as a decimal string.
+    lowMintDailyLimit: string
     mintLowSafe: string
     mintHighSafe: string
     proxyAdminOwner: string
@@ -124,6 +124,10 @@ const RPC_ENV_PATTERN = /^[A-Z0-9_]+_RPC_URL$/
 export function readWtariConfig(chainId: number): WtariChainConfig {
     const config: WtariChainConfig = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, `${chainId}.json`), 'utf8'))
     const file = `deploy/wtari/${chainId}.json`
+    // A JSON number could lose precision before parseEther, so only a whole-token decimal string is accepted.
+    if (typeof config.lowMintDailyLimit !== 'string' || !/^[0-9]+$/.test(config.lowMintDailyLimit)) {
+        throw new Error(`${file}: "lowMintDailyLimit" must be a string of whole tokens, e.g. "500000"`)
+    }
     // The config picks env var names and URLs, so keep it from routing secrets anywhere else.
     for (const name of [config.network.rpcUrlEnv, config.referenceRpcUrlEnv]) {
         if (!RPC_ENV_PATTERN.test(name)) {
@@ -283,7 +287,7 @@ export function initializeArgs(config: WtariChainConfig, tokenAddress: string) {
             config.mintLowSafe,
             config.mintHighSafe,
             config.proxyAdminOwner,
-            ethers.utils.parseEther(String(config.lowMintDailyLimit)),
+            ethers.utils.parseEther(config.lowMintDailyLimit),
         ],
         wTARIBridge: [tokenAddress],
     }
@@ -303,13 +307,56 @@ export function minterGrantTransaction(tokenAddress: string, controllerAddress: 
     }
 }
 
-export function printSafeTransaction(safe: string, tx: SafeTransaction) {
-    console.log(`Pending Safe transaction for proxyAdminOwner ${safe}:`)
-    console.log(`  to:        ${tx.to}`)
-    console.log(`  value:     ${tx.value}`)
-    console.log(`  operation: ${tx.operation} (CALL)`)
-    console.log(`  data:      ${tx.data}`)
-    console.log(`  what:      ${tx.description}`)
+/** EIP-712 safeTxHash (Safe v1.3+) of `tx` with all gas/refund fields zero, for `nonce` on `safe`. */
+export function safeTxHash(tx: SafeTransaction, safe: string, chainId: number, nonce: number) {
+    return ethers.utils._TypedDataEncoder.hash(
+        { chainId, verifyingContract: safe },
+        {
+            SafeTx: [
+                { name: 'to', type: 'address' },
+                { name: 'value', type: 'uint256' },
+                { name: 'data', type: 'bytes' },
+                { name: 'operation', type: 'uint8' },
+                { name: 'safeTxGas', type: 'uint256' },
+                { name: 'baseGas', type: 'uint256' },
+                { name: 'gasPrice', type: 'uint256' },
+                { name: 'gasToken', type: 'address' },
+                { name: 'refundReceiver', type: 'address' },
+                { name: 'nonce', type: 'uint256' },
+            ],
+        },
+        {
+            to: tx.to,
+            value: tx.value,
+            data: tx.data,
+            operation: tx.operation,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: ethers.constants.AddressZero,
+            refundReceiver: ethers.constants.AddressZero,
+            nonce,
+        }
+    )
+}
+
+export function printSafeTransaction(safe: string, tx: SafeTransaction, chainId: number, nonce?: number) {
+    console.log(`Pending Safe transaction for proxyAdminOwner ${safe} on chain ${chainId}:`)
+    console.log(`  to:             ${tx.to}`)
+    console.log(`  value:          ${tx.value}`)
+    console.log(`  data:           ${tx.data}`)
+    console.log(`  operation:      ${tx.operation} (CALL)`)
+    console.log('  safeTxGas:      0')
+    console.log('  baseGas:        0')
+    console.log('  gasPrice:       0')
+    console.log(`  gasToken:       ${ethers.constants.AddressZero}`)
+    console.log(`  refundReceiver: ${ethers.constants.AddressZero}`)
+    console.log(`  what:           ${tx.description}`)
+    if (nonce !== undefined) {
+        console.log(`  safeTxHash (nonce ${nonce}): ${safeTxHash(tx, safe, chainId, nonce)}`)
+    } else {
+        console.log('  (pass --safe-nonce <n> to also print the safeTxHash to compare on the hardware wallet)')
+    }
 }
 
 /**
@@ -570,6 +617,20 @@ function create2(salt: string, initCode: string): ExpectedCreation {
     return { address, salt, initCode }
 }
 
+// The hardhat-deploy records deploy:wtari creates; exactly these are exported to the package.
+export const WTARI_RECORD_NAMES = [
+    PROXY_ADMIN_NAME,
+    'wTARI',
+    'wTARI_Proxy',
+    'wTARI_Implementation',
+    'wTARIController',
+    'wTARIController_Proxy',
+    'wTARIController_Implementation',
+    'wTARIBridge',
+    'wTARIBridge_Proxy',
+    'wTARIBridge_Implementation',
+] as const
+
 /** Every wTARI deployment record's CREATE2 address, recomputed from compiled code, salts and config. */
 export async function expectedWtariCreations(
     hre: HardhatRuntimeEnvironment,
@@ -677,6 +738,7 @@ export async function checkWtariDeployment(
     const provider = hre.ethers.provider
     const failures: string[] = []
     const { chainId } = await provider.getNetwork()
+    assertProductionRpc(config)
     const expectedLzEndpoint = options.expectedLzEndpoint ?? officialLzEndpoint(config.network.eid, chainId)
 
     await checkSafes(provider, referenceProvider, config)
@@ -707,10 +769,10 @@ export async function checkWtariDeployment(
     const proxyAdmin = new Contract(expected[PROXY_ADMIN_NAME].address, ProxyAdmin.abi, provider)
     const roleContracts: { [name: string]: Contract } = { wTARI: token, wTARIController: controller }
     const minterGranted: boolean = await token.hasRole(MINTER_ROLE, controller.address)
-    if (!minterGranted && options.preGrant) {
-        // Computed here from the proven addresses, so signers can compare the queued Safe tx byte for byte.
-        printSafeTransaction(config.proxyAdminOwner, minterGrantTransaction(token.address, controller.address))
-    }
+    // Computed from the proven addresses, so signers can compare the queued Safe tx byte for byte. It is only
+    // returned (for the caller to print) once the whole check has passed.
+    const pendingSafeTransaction =
+        !minterGranted && options.preGrant ? minterGrantTransaction(token.address, controller.address) : undefined
 
     const expectedRoles: [string, string, string][] = [
         ...(minterGranted || !options.preGrant
@@ -933,7 +995,7 @@ export async function checkWtariDeployment(
     console.log(`wTARI totalSupply: ${ethers.utils.formatEther(totalSupply)}`)
 
     const limit = await controller.lowMintDailyLimit()
-    if (!limit.eq(ethers.utils.parseEther(String(config.lowMintDailyLimit)))) {
+    if (!limit.eq(ethers.utils.parseEther(config.lowMintDailyLimit))) {
         failures.push(
             `wTARIController: lowMintDailyLimit ${ethers.utils.formatEther(limit)} is not ${config.lowMintDailyLimit}`
         )
@@ -943,7 +1005,7 @@ export async function checkWtariDeployment(
         throw new Error(`wTARI deployment check failed:\n${failures.join('\n')}`)
     }
     console.log('wTARI deployment check passed')
-    return { bridgeStartBlock: bridgeCreation.blockNumber }
+    return { bridgeStartBlock: bridgeCreation.blockNumber, pendingSafeTransaction }
 }
 
 // Every contract deploy:wtari creates, by hardhat-deploy record name.
@@ -1054,10 +1116,11 @@ export async function verifyWtariContracts(hre: HardhatRuntimeEnvironment, confi
 export type ExportedEntry = { [key: string]: string | number }
 
 /**
- * One chain's entry for the package's deployments.json. Every record named wTARI* belongs to the wTARI set,
- * exported only as a whole: unchanged addresses keep what was exported (and checked) before; new or changed
- * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes, and if it
- * fails the last good (previously exported) set is kept. Other records are always exported.
+ * One chain's entry for the package's deployments.json. The wTARI* records are exported only as the exact
+ * WTARI_RECORD_NAMES set: unchanged addresses keep what was exported (and checked) before; new or changed
+ * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. When the set
+ * is incomplete, has unexpected wTARI* records, or fails the check, the last good (previously exported) set
+ * is kept. Other records are always exported.
  */
 export async function exportedChainEntry(
     previous: ExportedEntry,
@@ -1076,26 +1139,78 @@ export async function exportedChainEntry(
 
     const previousWtari = Object.entries(previous).filter(([key]) => key.startsWith('wTARI'))
     const previousAddresses = previousWtari.filter(([key]) => key !== 'wTARIBridgeStartBlock')
+    const keepLastGood = (message: string) => {
+        console.warn(`WARNING: ${message}; the new wTARI entries are not exported.`)
+        for (const [key, value] of previousWtari) entry[key] = value
+        return { entry, wtariFailed: true }
+    }
+
+    const names = Object.keys(wtariAddresses)
     const unchanged =
         previous.wTARIBridgeStartBlock !== undefined &&
-        previousAddresses.length === Object.keys(wtariAddresses).length &&
+        previousAddresses.length === names.length &&
         previousAddresses.every(([key, value]) => wtariAddresses[key] === value)
 
     // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
     // not block exports of an unchanged set.
-    if (Object.keys(wtariAddresses).length === 0 || unchanged) {
+    if (names.length === 0 || unchanged) {
         for (const [key, value] of previousWtari) entry[key] = value
         return { entry, wtariFailed: false }
+    }
+    if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
+        return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
     try {
         const bridgeStartBlock = await check()
         Object.assign(entry, wtariAddresses, { wTARIBridgeStartBlock: bridgeStartBlock })
         return { entry, wtariFailed: false }
     } catch (e) {
-        console.warn(`WARNING: check:wtari failed; the new wTARI entries are not exported.\n${(e as Error).message}`)
-        for (const [key, value] of previousWtari) entry[key] = value
-        return { entry, wtariFailed: true }
+        return keepLastGood(`check:wtari failed\n${(e as Error).message}`)
     }
+}
+
+/**
+ * Offline check of the package's deployments.json (no RPC): every chain with a wTARI* key must have a
+ * deploy/wtari/<chainId>.json, exactly the WTARI_RECORD_NAMES keys at their recomputed CREATE2 addresses, and
+ * a positive integer wTARIBridgeStartBlock. Returns the problems found.
+ */
+export async function wtariPackageProblems(
+    hre: HardhatRuntimeEnvironment,
+    exported: { [chainId: string]: ExportedEntry }
+) {
+    const problems: string[] = []
+    for (const [chainId, entry] of Object.entries(exported)) {
+        const keys = Object.keys(entry).filter((key) => key.startsWith('wTARI'))
+        if (keys.length === 0) continue
+        if (!fs.existsSync(path.join(CONFIG_DIR, `${chainId}.json`))) {
+            problems.push(`chain ${chainId}: has wTARI entries but no deploy/wtari/${chainId}.json`)
+            continue
+        }
+        const config = readWtariConfig(Number(chainId))
+        const expected = await expectedWtariCreations(
+            hre,
+            config,
+            officialLzEndpoint(config.network.eid, Number(chainId))
+        )
+        const wanted = [...WTARI_RECORD_NAMES, 'wTARIBridgeStartBlock']
+        for (const key of keys) {
+            if (!wanted.includes(key)) problems.push(`chain ${chainId}: unexpected key ${key}`)
+        }
+        for (const name of WTARI_RECORD_NAMES) {
+            const value = entry[name]
+            if (value === undefined) problems.push(`chain ${chainId}: missing ${name}`)
+            else if (String(value).toLowerCase() !== expected[name].address.toLowerCase()) {
+                problems.push(
+                    `chain ${chainId}: ${name} ${value} is not the expected CREATE2 address ${expected[name].address}`
+                )
+            }
+        }
+        const startBlock = entry.wTARIBridgeStartBlock
+        if (!Number.isInteger(startBlock) || (startBlock as number) <= 0) {
+            problems.push(`chain ${chainId}: wTARIBridgeStartBlock ${startBlock} is not a positive integer`)
+        }
+    }
+    return problems
 }
 
 async function assertChain(hre: HardhatRuntimeEnvironment, chain: number) {
@@ -1134,11 +1249,11 @@ export async function withRedactedRpcUrls(config: WtariChainConfig, action: () =
 
 task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy/wtari/<chain>.json')
     .addParam('chain', 'Target chain id (must match --network)', undefined, types.int)
-    .setAction(async ({ chain }: { chain: number }, hre) => {
+    .addOptionalParam('safeNonce', 'proxyAdminOwner Safe nonce, to print the pending safeTxHash', undefined, types.int)
+    .setAction(async ({ chain, safeNonce }: { chain: number; safeNonce?: number }, hre) => {
         const config = readWtariConfig(chain)
         await withRedactedRpcUrls(config, async () => {
             await assertChain(hre, chain)
-            assertProductionRpc(config)
             if (config.production && !(hre.network.config as { kmsKeyId?: string }).kmsKeyId) {
                 throw new Error('A production chain must be deployed with the KMS signer: set KMS_KEY_ID')
             }
@@ -1147,9 +1262,12 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             const lzEndpoint = officialLzEndpoint(config.network.eid, chain)
             const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
             // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
-            await checkWtariDeployment(hre, config, referenceProvider, { preGrant: pending !== undefined })
-            // The pre-grant check printed the pending Safe transaction, before verification can fail.
-            if (pending) {
+            const { pendingSafeTransaction } = await checkWtariDeployment(hre, config, referenceProvider, {
+                preGrant: pending !== undefined,
+            })
+            // Printed only after the check passed, and before verification (which can fail on its own).
+            if (pendingSafeTransaction) {
+                printSafeTransaction(config.proxyAdminOwner, pendingSafeTransaction, chain, safeNonce)
                 console.log(
                     'Before signing, a Safe signer runs check:wtari --pre-grant on a second machine (with its own RPC)' +
                         ' and compares the queued Safe transaction byte for byte with the one it prints.'
@@ -1175,11 +1293,32 @@ task('check:wtari', 'Check wTARI Safes, roles, ownership, LZ config, bytecode an
         'preGrant',
         'Allow the pending grantRole(MINTER_ROLE, controller) to be missing (review before signing it)'
     )
-    .setAction(async ({ chain, preGrant }: { chain: number; preGrant: boolean }, hre) => {
-        const config = readWtariConfig(chain)
-        await withRedactedRpcUrls(config, async () => {
-            await assertChain(hre, chain)
-            assertProductionRpc(config)
-            await checkWtariDeployment(hre, config, referenceProviderFor(config), { preGrant })
-        })
-    })
+    .addOptionalParam('safeNonce', 'proxyAdminOwner Safe nonce, to print the pending safeTxHash', undefined, types.int)
+    .setAction(
+        async ({ chain, preGrant, safeNonce }: { chain: number; preGrant: boolean; safeNonce?: number }, hre) => {
+            const config = readWtariConfig(chain)
+            await withRedactedRpcUrls(config, async () => {
+                await assertChain(hre, chain)
+                const { pendingSafeTransaction } = await checkWtariDeployment(
+                    hre,
+                    config,
+                    referenceProviderFor(config),
+                    {
+                        preGrant,
+                    }
+                )
+                if (pendingSafeTransaction) {
+                    printSafeTransaction(config.proxyAdminOwner, pendingSafeTransaction, chain, safeNonce)
+                }
+            })
+        }
+    )
+
+task('verify:wtari-package', 'Offline check of the wTARI entries in the package deployments.json (no RPC)').setAction(
+    async (_args, hre) => {
+        const file = path.join(__dirname, '..', 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+        const problems = await wtariPackageProblems(hre, JSON.parse(fs.readFileSync(file, 'utf8')))
+        if (problems.length > 0) throw new Error(`wTARI package entries are invalid:\n${problems.join('\n')}`)
+        console.log('wTARI package entries match the recomputed CREATE2 addresses')
+    }
+)

@@ -12,18 +12,22 @@ import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 import { networkForChain } from '../../scripts/wtari'
 import {
     REFERENCE_SAFES,
+    WTARI_RECORD_NAMES,
     WtariChainConfig,
     checkWtariDeployment,
     deployWtari,
     etherscanVerify,
+    expectedWtariCreations,
     exportedChainEntry,
     fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
     safeSingletons,
+    safeTxHash,
     uncheckedImmutables,
     verifyWtariContracts,
     withRedactedRpcUrls,
+    wtariPackageProblems,
 } from '../../tasks/wtari'
 import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
@@ -212,6 +216,8 @@ describe('wTARI config files', function () {
                 'explorer.apiURL must have chainid=999999',
             ],
             [999999, { ...testnet, production: undefined }, '"production" must be true or false'],
+            [999999, { ...testnet, lowMintDailyLimit: 500000 }, '"lowMintDailyLimit" must be a string of whole tokens'],
+            [999999, { ...testnet, lowMintDailyLimit: '1.5' }, '"lowMintDailyLimit" must be a string of whole tokens'],
             [999999, { ...testnet, production: true }, '"production" must be true exactly when referenceChainId is 1'],
             [999999, { ...mainnet, production: false }, '"production" must be true exactly when referenceChainId is 1'],
             [42161, { ...testnet, production: false }, 'chain 42161 is a mainnet, so "production" must be true'],
@@ -381,7 +387,7 @@ describe('deploy:wtari dry run', function () {
         config = {
             network: { name: 'hardhat', rpcUrlEnv: 'UNUSED_RPC_URL', defaultRpcUrl: '', eid: 1 },
             production: false,
-            lowMintDailyLimit: 500000,
+            lowMintDailyLimit: '500000',
             mintLowSafe: lowSafe.address,
             mintHighSafe: highSafe.address,
             proxyAdminOwner: adminSafe.address,
@@ -479,11 +485,21 @@ describe('deploy:wtari dry run', function () {
             'wTARI: totalSupply 1 is not 0 before the controller holds MINTER_ROLE'
         )
         await setStorage(token.address, totalSupplySlot.toHexString(), 0)
-        // What a Safe signer runs before signing: everything else must already pass.
-        await checkWtariDeployment(hre, config, ethers.provider, {
+        // What a Safe signer runs before signing: everything else must already pass, and only then is the
+        // pending transaction (computed from the proven addresses) returned for printing.
+        const preGrant = await checkWtariDeployment(hre, config, ethers.provider, {
             expectedLzEndpoint: endpoint.address,
             preGrant: true,
         })
+        expect(preGrant.pendingSafeTransaction).to.deep.equal(pending)
+
+        // Every caller of the check gets the production RPC rule, not only the tasks.
+        await expectRejection(
+            checkWtariDeployment(hre, { ...config, production: true }, ethers.provider, {
+                expectedLzEndpoint: endpoint.address,
+            }),
+            'UNUSED_RPC_URL must be set for a production chain'
+        )
 
         await adminSafe.exec(pending?.to, pending?.data)
         await checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
@@ -822,9 +838,101 @@ describe('log scan', function () {
     })
 })
 
+describe('verify:wtari-package (offline)', function () {
+    let expected: { [name: string]: { address: string } }
+    before(async function () {
+        const config = readWtariConfig(84532)
+        expected = await expectedWtariCreations(hre, config, officialLzEndpoint(config.network.eid, 84532))
+    })
+    const honest = () => {
+        const entry: { [key: string]: string | number } = { wXTM: '0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374' }
+        for (const name of WTARI_RECORD_NAMES) entry[name] = expected[name].address
+        entry.wTARIBridgeStartBlock = 1234
+        return entry
+    }
+
+    it('passes an honest entry and leaves chains without wTARI alone', async function () {
+        expect(await wtariPackageProblems(hre, { '1': { wXTM: '0x01' }, '84532': honest() })).to.deep.equal([])
+    })
+
+    it('fails a wrong address, a missing or extra wTARI key, a bad start block, or an unconfigured chain', async function () {
+        const cases: [object, string][] = [
+            [
+                { ...honest(), wTARIBridge: '0x0000000000000000000000000000000000000001' },
+                'wTARIBridge 0x0000000000000000000000000000000000000001 is not the expected CREATE2 address',
+            ],
+            [{ ...honest(), wTARIBridge_Proxy: undefined }, 'missing wTARIBridge_Proxy'],
+            [{ ...honest(), wTARIRogue: '0x01' }, 'unexpected key wTARIRogue'],
+            [{ ...honest(), wTARIBridgeStartBlock: 0 }, 'wTARIBridgeStartBlock 0 is not a positive integer'],
+        ]
+        for (const [entry, problem] of cases) {
+            const json = JSON.parse(JSON.stringify(entry))
+            const problems = await wtariPackageProblems(hre, { '84532': json })
+            expect(problems.join('\n')).to.include(problem)
+        }
+        expect(await wtariPackageProblems(hre, { '421614': { wTARI: '0x01' } })).to.deep.equal([
+            'chain 421614: has wTARI entries but no deploy/wtari/421614.json',
+        ])
+    })
+})
+
+describe('Safe transaction hash', function () {
+    it('matches the Safe v1.3+ EIP-712 safeTxHash computed by hand', function () {
+        const safe = '0x8aead919E7716a0840cB84495fA1AC76e04f7845'
+        const tx = {
+            to: '0x0000000000000000000000000000000000000abc',
+            value: '0',
+            operation: 0,
+            data: '0x1234',
+            description: '',
+        }
+        const coder = ethers.utils.defaultAbiCoder
+        // DOMAIN_SEPARATOR_TYPEHASH and SAFE_TX_TYPEHASH as hard-coded in Safe.sol (v1.3.0 / v1.4.1).
+        const domainSeparator = ethers.utils.keccak256(
+            coder.encode(
+                ['bytes32', 'uint256', 'address'],
+                ['0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218', 84532, safe]
+            )
+        )
+        const structHash = ethers.utils.keccak256(
+            coder.encode(
+                [
+                    'bytes32',
+                    'address',
+                    'uint256',
+                    'bytes32',
+                    'uint8',
+                    'uint256',
+                    'uint256',
+                    'uint256',
+                    'address',
+                    'address',
+                    'uint256',
+                ],
+                [
+                    '0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8',
+                    tx.to,
+                    0,
+                    ethers.utils.keccak256(tx.data),
+                    0,
+                    0,
+                    0,
+                    0,
+                    ethers.constants.AddressZero,
+                    ethers.constants.AddressZero,
+                    7,
+                ]
+            )
+        )
+        const byHand = ethers.utils.keccak256(ethers.utils.hexConcat(['0x1901', domainSeparator, structHash]))
+        expect(safeTxHash(tx, safe, 84532, 7)).to.equal(byHand)
+    })
+})
+
 describe('export-deployments wTARI gate', function () {
     const wxtm = { wXTM: '0x01', DefaultProxyAdmin: '0x02' }
-    const wtari = { wTARI: '0x0a', wTARIController: '0x0b', wTARIBridge: '0x0c' }
+    const wtari: { [name: string]: string } = {}
+    WTARI_RECORD_NAMES.forEach((name, i) => (wtari[name] = `0x0${i}`))
     const passing = async () => 123
     const failing = async (): Promise<number> => {
         throw new Error('check failed')
@@ -843,9 +951,10 @@ describe('export-deployments wTARI gate', function () {
         expect(wtariFailed).to.equal(false)
     })
 
-    it('keeps the last good wTARI set when the check of a changed set fails, also for a partial set', async function () {
+    it('keeps the last good wTARI set when a changed set fails the check, is partial, or has extra records', async function () {
         const previous = { wXTM: '0x01', wTARI: '0x99', wTARIBridgeStartBlock: 7 }
-        for (const records of [wtari, { wTARI: '0x0a', wTARIController: '0x0b' }]) {
+        const partial = { wTARI: '0x0a', wTARIController: '0x0b' }
+        for (const records of [wtari, partial, { ...wtari, wTARIExtra: '0x0e' }]) {
             const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...records }, failing)
             expect(entry).to.deep.equal({ ...wxtm, wTARI: '0x99', wTARIBridgeStartBlock: 7 })
             expect(wtariFailed).to.equal(true)
