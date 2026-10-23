@@ -1,0 +1,20 @@
+{
+  "network": {
+    "name": "base-sepolia-testnet",
+    "rpcUrlEnv": "BASE_SEPOLIA_RPC_URL",
+    "defaultRpcUrl": "https://sepolia.base.org",
+    "eid": 40245
+  },
+  "explorer": {
+    "apiURL": "https://api.etherscan.io/v2/api?chainid=84532",
+    "browserURL": "https://sepolia.basescan.org"
+  },
+  "production": false,
+  "lowMintDailyLimit": "500000",
+  "mintLowSafe": "0x0000000000000000000000000000000000000000",
+  "mintHighSafe": "0x0000000000000000000000000000000000000000",
+  "proxyAdminOwner": "0x0000000000000000000000000000000000000000",
+  "confirmations": 5,
+  "referenceChainId": 11155111,
+  "referenceRpcUrlEnv": "SEPOLIA_RPC_URL"
+}

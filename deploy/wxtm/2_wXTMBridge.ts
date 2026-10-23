@@ -1,14 +1,19 @@
 import { type DeployFunction } from 'hardhat-deploy/types'
 
 import assert from 'assert'
-import verify from '../utils/verify'
+import verify from '../../utils/verify'
 import { ethers } from 'hardhat'
-import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
+import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
-const contractName = 'wXTMController'
+const contractName = 'wXTMBridge'
 
 const deploy: DeployFunction = async (hre) => {
     const { getNamedAccounts, deployments } = hre
+
+    // if (hre.network.name !== 'sepolia-testnet') {
+    //     console.log(`Deployment script can only run on the Sepolia network. Current network: ${hre.network.name}`)
+    //     return
+    // }
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
@@ -16,10 +21,11 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
 
+    console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
 
-    const salt = ethers.utils.id('wXTMController-v0.0.1')
+    const salt = ethers.utils.id('wXTMBridge-v0.0.1')
 
     const proxy = await deploy(contractName, {
         from: deployer,
@@ -34,28 +40,18 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: [
-                        deployedContracts.wXTM,
-                        '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
-                        '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                        deployer,
-                    ],
+                    args: [deployedContracts.wXTM],
                 },
                 // onUpgrade: {
                 //     methodName: 'initialize',
-                //     args: [
-                //         deployedContracts.wXTM,
-                //         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
-                //         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                //         deployer,
-                //     ],
+                //     args: [deployedContracts.wXTM],
                 // },
             },
         },
     })
 
     console.log(
-        `wXTMController proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`
+        `wXTMBridge contract deployed to network: ${hre.network.name}, address: ${proxy.address}, wXTM: ${deployedContracts.wXTM}, implementation: ${proxy.implementation}`
     )
 
     /** @dev Verify Implementation */

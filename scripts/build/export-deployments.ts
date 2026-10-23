@@ -2,6 +2,16 @@ import * as fs from 'fs'
 
 import hre from 'hardhat'
 
+import {
+    ExportedEntry,
+    checkWtariDeployment,
+    exportedChainEntry,
+    hasWtariConfig,
+    readWtariConfig,
+    referenceProviderFor,
+    withRedactedRpcUrls,
+} from '../../tasks/wtari'
+
 async function exportDeploymentsAddresses(path_directory: string) {
     //@ts-ignore
     const chainId = await hre.getChainId()
@@ -9,44 +19,37 @@ async function exportDeploymentsAddresses(path_directory: string) {
     //@ts-ignore
     const deployments = await hre.deployments.all()
 
-    const deploymentsAddresses = Object.keys(deployments).reduce(
-        (acc, deployment) => {
-            acc[deployment] = deployments[deployment].address
-
-            return acc
-        },
-        {} as { [key: string]: string }
-    )
-
     if (!fs.existsSync(path_directory)) {
         fs.mkdirSync(path_directory)
     }
+    const file = `${path_directory}/deployments.json`
+    const exported: { [chainId: string]: ExportedEntry } = fs.existsSync(file)
+        ? JSON.parse(fs.readFileSync(file, 'utf8'))
+        : {}
+    const previous: ExportedEntry = exported[chainId] ?? {}
 
-    fs.stat(path_directory, (err, stat) => {
-        if (!err) {
-            if (stat.isDirectory()) {
-                let deployments: { [key: string]: any } = {}
-                if (fs.existsSync(`${path_directory}/deployments.json`)) {
-                    deployments = JSON.parse(fs.readFileSync(`${path_directory}/deployments.json`, 'utf8'))
-                    fs.unlink(`${path_directory}/deployments.json`, function (err) {
-                        if (err) return console.log(err)
-                    })
-                }
-                deployments[chainId] = {
-                    ...deployments[chainId],
-                    ...deploymentsAddresses,
-                }
-                fs.writeFile(
-                    `${path_directory}/deployments.json`,
-                    JSON.stringify(deployments, null, 2),
-                    { flag: 'a+' },
-                    (err) => {
-                        if (err) console.error(err)
-                    }
-                )
-            }
-        }
+    const addresses: { [name: string]: string } = {}
+    for (const name of Object.keys(deployments)) addresses[name] = deployments[name].address
+
+    const configuredStartBlock = hasWtariConfig(Number(chainId))
+        ? readWtariConfig(Number(chainId)).bridgeStartBlock
+        : undefined
+    const { entry, wtariFailed } = await exportedChainEntry(previous, addresses, configuredStartBlock, async () => {
+        const config = readWtariConfig(Number(chainId))
+        let bridgeStartBlock = 0
+        await withRedactedRpcUrls(config, async () => {
+            bridgeStartBlock = (await checkWtariDeployment(hre, config, referenceProviderFor(config))).bridgeStartBlock
+        })
+        return bridgeStartBlock
     })
+    if (wtariFailed) console.warn(`WARNING: new wTARI entries for chain ${chainId} were not exported.`)
+
+    exported[chainId] = entry
+    fs.writeFileSync(file, JSON.stringify(exported, null, 2))
+    if (wtariFailed) process.exitCode = 1
 }
 
-exportDeploymentsAddresses('./wxtm-bridge-contracts-typechain/deployments')
+exportDeploymentsAddresses('./wxtm-bridge-contracts-typechain/deployments').catch((e) => {
+    console.error(e)
+    process.exitCode = 1
+})

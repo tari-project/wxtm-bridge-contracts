@@ -4,10 +4,13 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "check:wtari": "ts-node --transpile-only scripts/wtari.ts check:wtari",
     "clean": "rm -rf artifacts cache out",
     "compile": "concurrently -c auto --names forge,hardhat '$npm_execpath run compile:forge' '$npm_execpath run compile:hardhat'",
     "compile:forge": "forge build",
     "compile:hardhat": "hardhat compile",
+    "deploy:wtari": "ts-node --transpile-only scripts/wtari.ts deploy:wtari",
+    "export-deployments-base": "npx hardhat --network base-mainnet run scripts/build/export-deployments.ts",
     "export-deployments-base-sepolia": "npx hardhat --network base-sepolia-testnet run scripts/build/export-deployments.ts",
     "export-deployments-mainnet": "npx hardhat --network mainnet run scripts/build/export-deployments.ts",
     "export-deployments-sepolia": "npx hardhat --network sepolia-testnet run scripts/build/export-deployments.ts",
@@ -20,11 +23,13 @@
     "lint:sol": "solhint 'contracts/**/*.sol'",
     "test": "$npm_execpath run test:forge && $npm_execpath run test:hardhat",
     "test:forge": "forge test",
-    "test:hardhat": "hardhat test"
+    "test:hardhat": "hardhat test --typecheck",
+    "verify:wtari": "ts-node --transpile-only scripts/wtari.ts verify:wtari",
+    "verify:wtari-package": "hardhat verify:wtari-package"
   },
   "resolutions": {
     "ethers": "^5.7.2",
-    "hardhat-deploy": "^0.12.1"
+    "hardhat-deploy": "0.12.4"
   },
   "devDependencies": {
     "@babel/core": "^7.23.9",
@@ -33,6 +38,7 @@
     "@layerzerolabs/lz-definitions": "^3.0.75",
     "@layerzerolabs/lz-evm-messagelib-v2": "^3.0.75",
     "@layerzerolabs/lz-evm-protocol-v2": "^3.0.75",
+    "@layerzerolabs/lz-evm-sdk-v2": "3.1.4",
     "@layerzerolabs/lz-evm-v1-0.7": "^3.0.75",
     "@layerzerolabs/lz-v2-utilities": "^3.0.75",
     "@layerzerolabs/metadata-tools": "^0.4.1",
@@ -52,6 +58,7 @@
     "@openzeppelin/hardhat-upgrades": "^1.15.0",
     "@rumblefishdev/hardhat-kms-signer": "^2.0.0",
     "@rushstack/eslint-patch": "^1.7.0",
+    "@safe-global/safe-deployments": "1.37.58",
     "@typechain/ethers-v5": "^11.1.2",
     "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^4.3.11",
@@ -65,7 +72,7 @@
     "ethers": "^5.7.2",
     "hardhat": "^2.22.10",
     "hardhat-contract-sizer": "^2.10.0",
-    "hardhat-deploy": "^0.12.1",
+    "hardhat-deploy": "0.12.4",
     "mocha": "^10.2.0",
     "prettier": "^3.2.5",
     "solhint": "^4.1.1",
@@ -79,12 +86,12 @@
   "pnpm": {
     "overrides": {
       "ethers": "^5.7.2",
-      "hardhat-deploy": "^0.12.1"
+      "hardhat-deploy": "0.12.4"
     }
   },
   "overrides": {
     "ethers": "^5.7.2",
-    "hardhat-deploy": "^0.12.1",
+    "hardhat-deploy": "0.12.4",
     "form-data": "^4.0.4"
   }
 }

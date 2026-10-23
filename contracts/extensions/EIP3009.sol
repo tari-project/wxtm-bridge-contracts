@@ -154,7 +154,7 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
         bytes32 s
     ) internal {
         if (block.timestamp < validAfter) revert EIP3009_AuthorizationNotYetValid();
-        if (block.timestamp > validBefore) revert EIP3009_AuthorizationExpired();
+        if (block.timestamp >= validBefore) revert EIP3009_AuthorizationExpired();
         if (_authorizationStates[from][nonce]) revert EIP3009_AuthorizationUsed();
 
         /** @dev Prevents reentrancy attack */

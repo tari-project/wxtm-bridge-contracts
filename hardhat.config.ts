@@ -8,9 +8,11 @@ import '@typechain/hardhat'
 
 import '@openzeppelin/hardhat-upgrades'
 import '@rumblefishdev/hardhat-kms-signer'
-import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
+import { HardhatUserConfig, HttpNetworkAccountsUserConfig, NetworksUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
+
+import { listWtariConfigs } from './tasks/wtari'
 
 /** @dev Uncomment below to use standard authentication method */
 // // Set your preferred authentication method
@@ -34,9 +36,64 @@ if (accounts == null) {
     )
 }
 
-const config: HardhatUserConfig = {
+const networks: NetworksUserConfig = {
+    /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
+    mainnet: {
+        eid: EndpointId.ETHEREUM_MAINNET,
+        url: process.env.MAINNET_RPC_URL || '',
+        kmsKeyId: process.env.KMS_KEY_ID,
+    },
+    'sepolia-testnet': {
+        eid: EndpointId.SEPOLIA_V2_TESTNET,
+        url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
+        kmsKeyId: process.env.KMS_KEY_ID,
+    },
+    'base-sepolia-testnet': {
+        eid: EndpointId.BASESEP_V2_TESTNET,
+        url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
+        accounts,
+    },
+    // 'optimism-testnet': {
+    //     eid: EndpointId.OPTSEP_V2_TESTNET,
+    //     url: process.env.RPC_URL_OP_SEPOLIA || 'https://optimism-sepolia.gateway.tenderly.co',
+    //     accounts,
+    // },
+    // 'avalanche-testnet': {
+    //     eid: EndpointId.AVALANCHE_V2_TESTNET,
+    //     url: process.env.RPC_URL_FUJI || 'https://avalanche-fuji.drpc.org',
+    //     accounts,
+    // },
+    // 'arbitrum-testnet': {
+    //     eid: EndpointId.ARBSEP_V2_TESTNET,
+    //     url: process.env.RPC_URL_ARB_SEPOLIA || 'https://arbitrum-sepolia.gateway.tenderly.co',
+    //     accounts,
+    // },
+    hardhat: {
+        // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
+        allowUnlimitedContractSize: true,
+        // Keep local dry-run deployments out of deployments/
+        saveDeployments: false,
+    },
+}
+
+// Each deploy/wtari/<chainId>.json brings its own network unless it is defined above.
+for (const [, wtari] of listWtariConfigs()) {
+    if (!networks[wtari.network.name]) {
+        networks[wtari.network.name] = {
+            eid: wtari.network.eid as EndpointId,
+            url: process.env[wtari.network.rpcUrlEnv] || wtari.network.defaultRpcUrl,
+            accounts,
+            kmsKeyId: process.env.KMS_KEY_ID,
+        }
+    }
+}
+
+// `etherscan` is read by the hardhat-etherscan plugin that @openzeppelin/hardhat-upgrades loads (wXTM verify).
+const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
     paths: {
         cache: 'cache/hardhat',
+        // hardhat-deploy loads every file under this folder; deploy/wtari holds JSON configs only.
+        deploy: 'deploy/wxtm',
     },
     solidity: {
         compilers: [
@@ -51,53 +108,13 @@ const config: HardhatUserConfig = {
             },
         ],
     },
-    networks: {
-        /** @dev If using 'KMS_KEY_ID' for safety remove/comment 'PRIVATE_KEY' variable from .env file */
-        mainnet: {
-            eid: EndpointId.ETHEREUM_MAINNET,
-            url: process.env.MAINNET_RPC_URL || '',
-            kmsKeyId: process.env.KMS_KEY_ID,
-        },
-        // 'sepolia-testnet': {
-        //     eid: EndpointId.SEPOLIA_V2_TESTNET,
-        //     url: process.env.SEPOLIA_RPC_URL || 'https://1rpc.io/sepolia',
-        //     kmsKeyId: process.env.KMS_KEY_ID,
-        // },
-        // 'base-sepolia-testnet': {
-        //     eid: EndpointId.BASESEP_V2_TESTNET,
-        //     url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
-        //     accounts,
-        // },
-        // 'optimism-testnet': {
-        //     eid: EndpointId.OPTSEP_V2_TESTNET,
-        //     url: process.env.RPC_URL_OP_SEPOLIA || 'https://optimism-sepolia.gateway.tenderly.co',
-        //     accounts,
-        // },
-        // 'avalanche-testnet': {
-        //     eid: EndpointId.AVALANCHE_V2_TESTNET,
-        //     url: process.env.RPC_URL_FUJI || 'https://avalanche-fuji.drpc.org',
-        //     accounts,
-        // },
-        // 'arbitrum-testnet': {
-        //     eid: EndpointId.ARBSEP_V2_TESTNET,
-        //     url: process.env.RPC_URL_ARB_SEPOLIA || 'https://arbitrum-sepolia.gateway.tenderly.co',
-        //     accounts,
-        // },
-        hardhat: {
-            // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
-            allowUnlimitedContractSize: true,
-        },
-    },
+    networks,
     typechain: {
         outDir: 'typechain',
         target: 'ethers-v5',
     },
     etherscan: {
         apiKey: process.env.ETHERSCAN_API_KEY,
-    },
-    sourcify: {
-        // Disabled by default -> Doesn't need an API key
-        enabled: true,
     },
     namedAccounts: {
         deployer: {

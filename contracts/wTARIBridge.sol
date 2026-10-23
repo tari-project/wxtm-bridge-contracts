@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.22;
+
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IwTARI } from "./interfaces/IwTARI.sol";
+
+contract wTARIBridge is Initializable {
+    using SafeERC20 for IERC20;
+
+    error InsufficientAmount();
+    error InvalidTargetTariAddress();
+
+    uint256 private constant MAX_TARGET_TARI_ADDRESS_LENGTH = 128;
+
+    uint256 private nonce;
+    address private wTARI;
+
+    event TokensUnwrapped(address from, string targetTariAddress, uint256 amount, uint256 nonce);
+
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _wTARI) external initializer {
+        wTARI = _wTARI;
+    }
+
+    function bridgeToTari(string memory targetTariAddress, uint256 value) external {
+        if (value < 1000 ether) revert InsufficientAmount();
+        _checkTargetTariAddress(targetTariAddress);
+
+        IERC20(wTARI).safeTransferFrom(msg.sender, address(this), value);
+
+        IwTARI(wTARI).burn(value);
+
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
+
+        nonce++;
+    }
+
+    function bridgeToTariWithAuthorization(
+        string memory targetTariAddress,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 authNonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        if (value < 1000 ether) revert InsufficientAmount();
+        _checkTargetTariAddress(targetTariAddress);
+
+        IwTARI(wTARI).receiveWithAuthorization(
+            msg.sender,
+            address(this),
+            value,
+            validAfter,
+            validBefore,
+            authNonce,
+            v,
+            r,
+            s
+        );
+
+        IwTARI(wTARI).burn(value);
+
+        emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
+
+        nonce++;
+    }
+
+    function _checkTargetTariAddress(string memory targetTariAddress) private pure {
+        uint256 length = bytes(targetTariAddress).length;
+        if (length == 0 || length > MAX_TARGET_TARI_ADDRESS_LENGTH) revert InvalidTargetTariAddress();
+    }
+}

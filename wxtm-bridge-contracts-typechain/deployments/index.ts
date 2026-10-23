@@ -8,18 +8,46 @@ export interface Deployments {
     wXTM: WagmiAddress
     wXTMBridge: WagmiAddress
     wXTMController: WagmiAddress
+    // wTARI set: undefined on chains without a wTARI deployment
+    wTARI?: WagmiAddress
+    wTARIController?: WagmiAddress
+    wTARIBridge?: WagmiAddress
+    wTARIBridgeStartBlock?: number
 }
 
 export type DeployedChainNames = keyof typeof KNOWN_CHAIN_IDS
 export type DeployedChains = (typeof KNOWN_CHAIN_IDS)[DeployedChainNames]
 export type DeployedChain = DeployedChains
 
-export function getDeployments(chainId: DeployedChain): Deployments {
-    const dep = deployments[chainId]
+const allDeployments = deployments as { [chainId: string]: { [name: string]: string | number } | undefined }
+
+// Chains with a wXTM deployment.
+export type WxtmChain = 1 | 11155111 | 84532
+
+// wXTM chains keep the required wXTM fields; any other chain id (e.g. 8453, or one from getWtariChains) may lack them.
+export function getDeployments(chainId: WxtmChain): Deployments
+export function getDeployments(chainId: number): Partial<Deployments>
+export function getDeployments(chainId: number): Partial<Deployments> {
+    const dep = allDeployments[chainId] ?? {}
 
     return {
         wXTM: dep.wXTM as WagmiAddress,
         wXTMBridge: dep.wXTMBridge as WagmiAddress,
         wXTMController: dep.wXTMController as WagmiAddress,
+        wTARI: dep.wTARI as WagmiAddress | undefined,
+        wTARIController: dep.wTARIController as WagmiAddress | undefined,
+        wTARIBridge: dep.wTARIBridge as WagmiAddress | undefined,
+        wTARIBridgeStartBlock: dep.wTARIBridgeStartBlock as number | undefined,
     }
+}
+
+/** Chain ids with a wTARI deployment. */
+export function getWtariChains(): number[] {
+    const chains: number[] = []
+    for (const chainId of Object.keys(allDeployments)) {
+        if (allDeployments[chainId]?.wTARI) {
+            chains.push(Number(chainId))
+        }
+    }
+    return chains
 }
