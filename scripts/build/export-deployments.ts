@@ -6,6 +6,7 @@ import {
     ExportedEntry,
     checkWtariDeployment,
     exportedChainEntry,
+    hasWtariConfig,
     readWtariConfig,
     referenceProviderFor,
     withRedactedRpcUrls,
@@ -30,7 +31,10 @@ async function exportDeploymentsAddresses(path_directory: string) {
     const addresses: { [name: string]: string } = {}
     for (const name of Object.keys(deployments)) addresses[name] = deployments[name].address
 
-    const { entry, wtariFailed } = await exportedChainEntry(previous, addresses, async () => {
+    const configuredStartBlock = hasWtariConfig(Number(chainId))
+        ? readWtariConfig(Number(chainId)).bridgeStartBlock
+        : undefined
+    const { entry, wtariFailed } = await exportedChainEntry(previous, addresses, configuredStartBlock, async () => {
         const config = readWtariConfig(Number(chainId))
         let bridgeStartBlock = 0
         await withRedactedRpcUrls(config, async () => {

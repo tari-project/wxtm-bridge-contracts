@@ -26,6 +26,8 @@ export interface WtariChainConfig {
     confirmations: number
     // Ethereum chain whose mint Safes (REFERENCE_SAFES) the mint Safes must match.
     referenceChainId: number
+    // Block of the wTARIBridge proxy creation, recorded after the deploy from check:wtari's output.
+    bridgeStartBlock?: number
     referenceRpcUrlEnv: string
 }
 
@@ -119,6 +121,10 @@ export function safeSingletons(chainId: number): string[] {
 }
 
 const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
+
+export function hasWtariConfig(chainId: number) {
+    return fs.existsSync(path.join(CONFIG_DIR, `${chainId}.json`))
+}
 const RPC_ENV_PATTERN = /^[A-Z0-9_]+_RPC_URL$/
 
 export function readWtariConfig(chainId: number): WtariChainConfig {
@@ -127,6 +133,12 @@ export function readWtariConfig(chainId: number): WtariChainConfig {
     // A JSON number could lose precision before parseEther, so only a whole-token decimal string is accepted.
     if (typeof config.lowMintDailyLimit !== 'string' || !/^[0-9]+$/.test(config.lowMintDailyLimit)) {
         throw new Error(`${file}: "lowMintDailyLimit" must be a string of whole tokens, e.g. "500000"`)
+    }
+    if (
+        config.bridgeStartBlock !== undefined &&
+        (!Number.isInteger(config.bridgeStartBlock) || config.bridgeStartBlock <= 0)
+    ) {
+        throw new Error(`${file}: "bridgeStartBlock" must be a positive integer`)
     }
     // The config picks env var names and URLs, so keep it from routing secrets anywhere else.
     for (const name of [config.network.rpcUrlEnv, config.referenceRpcUrlEnv]) {
@@ -307,37 +319,44 @@ export function minterGrantTransaction(tokenAddress: string, controllerAddress: 
     }
 }
 
-/** EIP-712 safeTxHash (Safe v1.3+) of `tx` with all gas/refund fields zero, for `nonce` on `safe`. */
-export function safeTxHash(tx: SafeTransaction, safe: string, chainId: number, nonce: number) {
-    return ethers.utils._TypedDataEncoder.hash(
-        { chainId, verifyingContract: safe },
-        {
-            SafeTx: [
-                { name: 'to', type: 'address' },
-                { name: 'value', type: 'uint256' },
-                { name: 'data', type: 'bytes' },
-                { name: 'operation', type: 'uint8' },
-                { name: 'safeTxGas', type: 'uint256' },
-                { name: 'baseGas', type: 'uint256' },
-                { name: 'gasPrice', type: 'uint256' },
-                { name: 'gasToken', type: 'address' },
-                { name: 'refundReceiver', type: 'address' },
-                { name: 'nonce', type: 'uint256' },
-            ],
-        },
-        {
-            to: tx.to,
-            value: tx.value,
-            data: tx.data,
-            operation: tx.operation,
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: 0,
-            gasToken: ethers.constants.AddressZero,
-            refundReceiver: ethers.constants.AddressZero,
-            nonce,
-        }
-    )
+/**
+ * EIP-712 hashes (Safe v1.3+) of `tx` with all gas/refund fields zero, for `nonce` on `safe`: the domain hash
+ * and message hash (hashStruct) that hardware wallets show, and the final safeTxHash.
+ */
+export function safeTxHashes(tx: SafeTransaction, safe: string, chainId: number, nonce: number) {
+    const domain = { chainId, verifyingContract: safe }
+    const types = {
+        SafeTx: [
+            { name: 'to', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'data', type: 'bytes' },
+            { name: 'operation', type: 'uint8' },
+            { name: 'safeTxGas', type: 'uint256' },
+            { name: 'baseGas', type: 'uint256' },
+            { name: 'gasPrice', type: 'uint256' },
+            { name: 'gasToken', type: 'address' },
+            { name: 'refundReceiver', type: 'address' },
+            { name: 'nonce', type: 'uint256' },
+        ],
+    }
+    const message = {
+        to: tx.to,
+        value: tx.value,
+        data: tx.data,
+        operation: tx.operation,
+        safeTxGas: 0,
+        baseGas: 0,
+        gasPrice: 0,
+        gasToken: ethers.constants.AddressZero,
+        refundReceiver: ethers.constants.AddressZero,
+        nonce,
+    }
+    const encoder = ethers.utils._TypedDataEncoder
+    return {
+        domainHash: encoder.hashDomain(domain),
+        messageHash: encoder.from(types).hash(message),
+        safeTxHash: encoder.hash(domain, types, message),
+    }
 }
 
 export function printSafeTransaction(safe: string, tx: SafeTransaction, chainId: number, nonce?: number) {
@@ -352,11 +371,33 @@ export function printSafeTransaction(safe: string, tx: SafeTransaction, chainId:
     console.log(`  gasToken:       ${ethers.constants.AddressZero}`)
     console.log(`  refundReceiver: ${ethers.constants.AddressZero}`)
     console.log(`  what:           ${tx.description}`)
-    if (nonce !== undefined) {
-        console.log(`  safeTxHash (nonce ${nonce}): ${safeTxHash(tx, safe, chainId, nonce)}`)
-    } else {
-        console.log('  (pass --safe-nonce <n> to also print the safeTxHash to compare on the hardware wallet)')
+    if (nonce === undefined) {
+        console.log('  (pass --safe-nonce <n> to also print the hashes to compare on the hardware wallet)')
+        return
     }
+    const hashes = safeTxHashes(tx, safe, chainId, nonce)
+    console.log(`  nonce:          ${nonce}`)
+    console.log(`  Domain hash:    ${hashes.domainHash}`)
+    console.log(`  Message hash:   ${hashes.messageHash}`)
+    console.log(`  safeTxHash:     ${hashes.safeTxHash}`)
+}
+
+/** Prints the pending Safe transaction, warning if `nonce` is below the Safe's on-chain nonce. */
+async function printPendingSafeTransaction(
+    provider: providers.Provider,
+    config: WtariChainConfig,
+    tx: SafeTransaction,
+    chainId: number,
+    nonce?: number
+) {
+    if (nonce !== undefined) {
+        const safe = new Contract(config.proxyAdminOwner, ['function nonce() view returns (uint256)'], provider)
+        const onChain = await safe.nonce()
+        if (onChain.gt(nonce)) {
+            console.warn(`WARNING: --safe-nonce ${nonce} is below the Safe's current nonce ${onChain}`)
+        }
+    }
+    printSafeTransaction(config.proxyAdminOwner, tx, chainId, nonce)
 }
 
 /**
@@ -804,6 +845,12 @@ export async function checkWtariDeployment(
     const tokenCreation = await proxyCreation('wTARI')
     const controllerCreation = await proxyCreation('wTARIController')
     const bridgeCreation = await proxyCreation('wTARIBridge')
+    console.log(`wTARIBridge proxy creation block (bridgeStartBlock): ${bridgeCreation.blockNumber}`)
+    if (config.bridgeStartBlock !== undefined && config.bridgeStartBlock !== bridgeCreation.blockNumber) {
+        failures.push(
+            `config bridgeStartBlock ${config.bridgeStartBlock} is not the bridge proxy creation block ${bridgeCreation.blockNumber}`
+        )
+    }
     const accounts = [tokenCreation.from]
     try {
         accounts.push((await hre.getNamedAccounts()).deployer)
@@ -1127,6 +1174,8 @@ export type ExportedEntry = { [key: string]: string | number }
 export async function exportedChainEntry(
     previous: ExportedEntry,
     addresses: { [name: string]: string },
+    // bridgeStartBlock from deploy/wtari/<chainId>.json, if any
+    configuredStartBlock: number | undefined,
     check: () => Promise<number>
 ) {
     const entry: ExportedEntry = {}
@@ -1155,7 +1204,19 @@ export async function exportedChainEntry(
 
     // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
     // not block exports of an unchanged set.
-    if (names.length === 0 || unchanged) {
+    if (names.length === 0) {
+        for (const [key, value] of previousWtari) entry[key] = value
+        return { entry, wtariFailed: false }
+    }
+    if (configuredStartBlock === undefined) {
+        return keepLastGood('the chain config has no bridgeStartBlock; record it from check:wtari first')
+    }
+    if (unchanged) {
+        if (previous.wTARIBridgeStartBlock !== configuredStartBlock) {
+            return keepLastGood(
+                `exported wTARIBridgeStartBlock ${previous.wTARIBridgeStartBlock} is not the config's ${configuredStartBlock}`
+            )
+        }
         for (const [key, value] of previousWtari) entry[key] = value
         return { entry, wtariFailed: false }
     }
@@ -1163,7 +1224,13 @@ export async function exportedChainEntry(
         return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
     try {
+        // check:wtari also fails if the config's bridgeStartBlock differs from the proven creation block.
         const bridgeStartBlock = await check()
+        if (bridgeStartBlock !== configuredStartBlock) {
+            return keepLastGood(
+                `proven bridge start block ${bridgeStartBlock} is not the config's ${configuredStartBlock}`
+            )
+        }
         Object.assign(entry, wtariAddresses, { wTARIBridgeStartBlock: bridgeStartBlock })
         return { entry, wtariFailed: false }
     } catch (e) {
@@ -1184,7 +1251,7 @@ export async function wtariPackageProblems(
     for (const [chainId, entry] of Object.entries(exported)) {
         const keys = Object.keys(entry).filter((key) => key.startsWith('wTARI'))
         if (keys.length === 0) continue
-        if (!fs.existsSync(path.join(CONFIG_DIR, `${chainId}.json`))) {
+        if (!hasWtariConfig(Number(chainId))) {
             problems.push(`chain ${chainId}: has wTARI entries but no deploy/wtari/${chainId}.json`)
             continue
         }
@@ -1210,6 +1277,13 @@ export async function wtariPackageProblems(
         const startBlock = entry.wTARIBridgeStartBlock
         if (!Number.isInteger(startBlock) || (startBlock as number) <= 0) {
             problems.push(`chain ${chainId}: wTARIBridgeStartBlock ${startBlock} is not a positive integer`)
+        }
+        if (config.bridgeStartBlock === undefined) {
+            problems.push(`chain ${chainId}: deploy/wtari/${chainId}.json has no bridgeStartBlock`)
+        } else if (startBlock !== config.bridgeStartBlock) {
+            problems.push(
+                `chain ${chainId}: wTARIBridgeStartBlock ${startBlock} is not the config's ${config.bridgeStartBlock}`
+            )
         }
     }
     return problems
@@ -1269,7 +1343,7 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             })
             // Printed only after the check passed, and before verification (which can fail on its own).
             if (pendingSafeTransaction) {
-                printSafeTransaction(config.proxyAdminOwner, pendingSafeTransaction, chain, safeNonce)
+                await printPendingSafeTransaction(hre.ethers.provider, config, pendingSafeTransaction, chain, safeNonce)
                 console.log(
                     'Before signing, a Safe signer runs check:wtari --pre-grant on a second machine (with its own RPC)' +
                         ' and compares the queued Safe transaction byte for byte with the one it prints.'
@@ -1310,7 +1384,13 @@ task('check:wtari', 'Check wTARI Safes, roles, ownership, LZ config, bytecode an
                     }
                 )
                 if (pendingSafeTransaction) {
-                    printSafeTransaction(config.proxyAdminOwner, pendingSafeTransaction, chain, safeNonce)
+                    await printPendingSafeTransaction(
+                        hre.ethers.provider,
+                        config,
+                        pendingSafeTransaction,
+                        chain,
+                        safeNonce
+                    )
                 }
             })
         }

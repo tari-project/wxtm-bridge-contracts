@@ -16,6 +16,9 @@ env:
 
 jobs:
   publish:
+    # Only release tags publish (also for workflow_dispatch); the environment adds required reviewers.
+    if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/@tari-project/wxtm-bridge-contracts@v')
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write

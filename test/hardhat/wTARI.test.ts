@@ -23,7 +23,7 @@ import {
     officialLzEndpoint,
     readWtariConfig,
     safeSingletons,
-    safeTxHash,
+    safeTxHashes,
     uncheckedImmutables,
     verifyWtariContracts,
     withRedactedRpcUrls,
@@ -217,6 +217,8 @@ describe('wTARI config files', function () {
             ],
             [999999, { ...testnet, production: undefined }, '"production" must be true or false'],
             [999999, { ...testnet, lowMintDailyLimit: 500000 }, '"lowMintDailyLimit" must be a string of whole tokens'],
+            [999999, { ...testnet, bridgeStartBlock: 0 }, '"bridgeStartBlock" must be a positive integer'],
+            [999999, { ...testnet, bridgeStartBlock: '5' }, '"bridgeStartBlock" must be a positive integer'],
             [999999, { ...testnet, lowMintDailyLimit: '1.5' }, '"lowMintDailyLimit" must be a string of whole tokens'],
             [999999, { ...testnet, production: true }, '"production" must be true exactly when referenceChainId is 1'],
             [999999, { ...mainnet, production: false }, '"production" must be true exactly when referenceChainId is 1'],
@@ -566,6 +568,22 @@ describe('deploy:wtari dry run', function () {
         await check()
     })
 
+    it('requires a recorded bridgeStartBlock to equal the proven bridge creation block', async function () {
+        const check = (bridgeStartBlock: number) =>
+            checkWtariDeployment(hre, { ...config, bridgeStartBlock }, ethers.provider, {
+                expectedLzEndpoint: endpoint.address,
+            })
+        const creation = await ethers.provider.getTransaction(
+            (await deployments.get('wTARIBridge_Proxy')).transactionHash as string
+        )
+        const provenBlock = creation.blockNumber as number
+        expect((await check(provenBlock)).bridgeStartBlock).to.equal(provenBlock)
+        await expectRejection(
+            check(provenBlock + 1),
+            `config bridgeStartBlock ${provenBlock + 1} is not the bridge proxy creation block ${provenBlock}`
+        )
+    })
+
     it('never gives the deployer any role or ownership', async function () {
         const { token, controller } = await contracts()
         for (const contract of [token, controller]) {
@@ -855,10 +873,18 @@ describe('log scan', function () {
 })
 
 describe('verify:wtari-package (offline)', function () {
+    const configFile = path.join(ROOT, 'deploy', 'wtari', '84532.json')
+    let originalConfig: string
     let expected: { [name: string]: { address: string } }
     before(async function () {
         const config = readWtariConfig(84532)
         expected = await expectedWtariCreations(hre, config, officialLzEndpoint(config.network.eid, 84532))
+        // The package entry must match a recorded bridgeStartBlock, so record one for these tests only.
+        originalConfig = fs.readFileSync(configFile, 'utf8')
+        fs.writeFileSync(configFile, JSON.stringify({ ...JSON.parse(originalConfig), bridgeStartBlock: 1234 }))
+    })
+    after(function () {
+        fs.writeFileSync(configFile, originalConfig)
     })
     const honest = () => {
         const entry: { [key: string]: string | number } = { wXTM: '0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374' }
@@ -880,11 +906,19 @@ describe('verify:wtari-package (offline)', function () {
             [{ ...honest(), wTARIBridge_Proxy: undefined }, 'missing wTARIBridge_Proxy'],
             [{ ...honest(), wTARIRogue: '0x01' }, 'unexpected key wTARIRogue'],
             [{ ...honest(), wTARIBridgeStartBlock: 0 }, 'wTARIBridgeStartBlock 0 is not a positive integer'],
+            [{ ...honest(), wTARIBridgeStartBlock: 1235 }, "wTARIBridgeStartBlock 1235 is not the config's 1234"],
         ]
         for (const [entry, problem] of cases) {
             const json = JSON.parse(JSON.stringify(entry))
             const problems = await wtariPackageProblems(hre, { '84532': json })
             expect(problems.join('\n')).to.include(problem)
+        }
+        fs.writeFileSync(configFile, originalConfig)
+        try {
+            const problems = await wtariPackageProblems(hre, { '84532': honest() })
+            expect(problems).to.deep.equal(['chain 84532: deploy/wtari/84532.json has no bridgeStartBlock'])
+        } finally {
+            fs.writeFileSync(configFile, JSON.stringify({ ...JSON.parse(originalConfig), bridgeStartBlock: 1234 }))
         }
         expect(await wtariPackageProblems(hre, { '421614': { wTARI: '0x01' } })).to.deep.equal([
             'chain 421614: has wTARI entries but no deploy/wtari/421614.json',
@@ -893,7 +927,7 @@ describe('verify:wtari-package (offline)', function () {
 })
 
 describe('Safe transaction hash', function () {
-    it('matches the Safe v1.3+ EIP-712 safeTxHash computed by hand', function () {
+    it('matches the Safe v1.3+ EIP-712 domain hash, message hash and safeTxHash computed by hand', function () {
         const safe = '0x8aead919E7716a0840cB84495fA1AC76e04f7845'
         const tx = {
             to: '0x0000000000000000000000000000000000000abc',
@@ -941,7 +975,10 @@ describe('Safe transaction hash', function () {
             )
         )
         const byHand = ethers.utils.keccak256(ethers.utils.hexConcat(['0x1901', domainSeparator, structHash]))
-        expect(safeTxHash(tx, safe, 84532, 7)).to.equal(byHand)
+        const hashes = safeTxHashes(tx, safe, 84532, 7)
+        expect(hashes.domainHash).to.equal(domainSeparator)
+        expect(hashes.messageHash).to.equal(structHash)
+        expect(hashes.safeTxHash).to.equal(byHand)
     })
 })
 
@@ -956,13 +993,13 @@ describe('export-deployments wTARI gate', function () {
 
     it('exports wXTM-only networks unchanged and keeps earlier wTARI keys when there are no wTARI records', async function () {
         const previous = { wXTM: '0x01', wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
-        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, failing)
+        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
         expect(entry).to.deep.equal({ ...previous, ...wxtm })
         expect(wtariFailed).to.equal(false)
     })
 
     it('exports a new wTARI set only after the check passes, with the proven start block', async function () {
-        const { entry, wtariFailed } = await exportedChainEntry({}, { ...wxtm, ...wtari }, passing)
+        const { entry, wtariFailed } = await exportedChainEntry({}, { ...wxtm, ...wtari }, 123, passing)
         expect(entry).to.deep.equal({ ...wxtm, ...wtari, wTARIBridgeStartBlock: 123 })
         expect(wtariFailed).to.equal(false)
     })
@@ -971,23 +1008,43 @@ describe('export-deployments wTARI gate', function () {
         const previous = { wXTM: '0x01', wTARI: '0x99', wTARIBridgeStartBlock: 7 }
         const partial = { wTARI: '0x0a', wTARIController: '0x0b' }
         for (const records of [wtari, partial, { ...wtari, wTARIExtra: '0x0e' }]) {
-            const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...records }, failing)
+            const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...records }, 123, failing)
             expect(entry).to.deep.equal({ ...wxtm, wTARI: '0x99', wTARIBridgeStartBlock: 7 })
             expect(wtariFailed).to.equal(true)
         }
     })
 
     it('omits every wTARI key when the check fails and nothing was exported before', async function () {
-        const { entry, wtariFailed } = await exportedChainEntry({ wXTM: '0x01' }, { ...wxtm, ...wtari }, failing)
+        const { entry, wtariFailed } = await exportedChainEntry({ wXTM: '0x01' }, { ...wxtm, ...wtari }, 123, failing)
         expect(entry).to.deep.equal(wxtm)
         expect(wtariFailed).to.equal(true)
     })
 
     it('keeps an unchanged, already exported wTARI set without re-running the check', async function () {
         const previous = { ...wxtm, ...wtari, wTARIBridgeStartBlock: 7 }
-        const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...wtari }, failing)
+        const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...wtari }, 7, failing)
         expect(entry).to.deep.equal(previous)
         expect(wtariFailed).to.equal(false)
+    })
+
+    it('requires the config bridgeStartBlock, equal to the proven block, before exporting wTARI keys', async function () {
+        const previous = { wXTM: '0x01', wTARI: '0x99', wTARIBridgeStartBlock: 7 }
+        const lastGood = { ...wxtm, wTARI: '0x99', wTARIBridgeStartBlock: 7 }
+        // Not recorded in the config yet, or recorded with a different block than the proven one.
+        for (const configured of [undefined, 124]) {
+            const { entry, wtariFailed } = await exportedChainEntry(
+                previous,
+                { ...wxtm, ...wtari },
+                configured,
+                passing
+            )
+            expect(entry).to.deep.equal(lastGood)
+            expect(wtariFailed).to.equal(true)
+        }
+        // An unchanged set whose exported start block differs from the config.
+        const exported = { ...wxtm, ...wtari, wTARIBridgeStartBlock: 7 }
+        const unchanged = await exportedChainEntry(exported, { ...wxtm, ...wtari }, 8, passing)
+        expect(unchanged.wtariFailed).to.equal(true)
     })
 })
 
