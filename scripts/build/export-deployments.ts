@@ -2,6 +2,8 @@ import * as fs from 'fs'
 
 import hre from 'hardhat'
 
+import { checkWtariDeployment, readWtariConfig, referenceProviderFor, withRedactedRpcUrls } from '../../tasks/wtari'
+
 async function exportDeploymentsAddresses(path_directory: string) {
     //@ts-ignore
     const chainId = await hre.getChainId()
@@ -18,9 +20,14 @@ async function exportDeploymentsAddresses(path_directory: string) {
         {} as { [key: string]: string | number }
     )
 
-    // Consumers start indexing TokensUnwrapped from the bridge proxy's deployment block.
-    if (deployments.wTARIBridge?.receipt) {
-        deploymentsAddresses.wTARIBridgeStartBlock = deployments.wTARIBridge.receipt.blockNumber
+    // wTARI entries are exported only after check:wtari passes; consumers start indexing TokensUnwrapped from
+    // the bridge proxy's proven creation block.
+    if (deployments.wTARIBridge) {
+        const config = readWtariConfig(Number(chainId))
+        await withRedactedRpcUrls(config, async () => {
+            const { bridgeStartBlock } = await checkWtariDeployment(hre, config, referenceProviderFor(config))
+            deploymentsAddresses.wTARIBridgeStartBlock = bridgeStartBlock
+        })
     }
 
     if (!fs.existsSync(path_directory)) {
@@ -54,4 +61,7 @@ async function exportDeploymentsAddresses(path_directory: string) {
     })
 }
 
-exportDeploymentsAddresses('./wxtm-bridge-contracts-typechain/deployments')
+exportDeploymentsAddresses('./wxtm-bridge-contracts-typechain/deployments').catch((e) => {
+    console.error(e)
+    process.exitCode = 1
+})

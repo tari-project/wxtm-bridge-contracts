@@ -621,16 +621,11 @@ describe('deploy:wtari dry run', function () {
         }
     })
 
-    it('check:wtari catches changes it can undo: extra roles, LZ settings, budget and bytecode', async function () {
+    it('check:wtari catches changes it can undo: LZ settings, budget, bytecode and slots', async function () {
         const { token, controller } = await contracts()
         const asSafe = (contract: Contract, fn: string, args: unknown[]) =>
             adminSafe.exec(contract.address, contract.interface.encodeFunctionData(fn, args))
         const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
-        const minterRole = ethers.utils.id('MINTER_ROLE')
-
-        await asSafe(token, 'grantRole', [minterRole, user.address])
-        await expectRejection(check(), `wTARI: unexpected MINTER_ROLE holder ${user.address.toLowerCase()}`)
-        await asSafe(token, 'revokeRole', [minterRole, user.address])
 
         await asSafe(token, 'setDelegate', [user.address])
         await expectRejection(check(), `wTARI: LayerZero delegate ${user.address} is not proxyAdminOwner`)
@@ -691,8 +686,32 @@ describe('deploy:wtari dry run', function () {
         await check()
     })
 
-    it('check:wtari keeps failing after a peer, enforced option or deployer grant was ever set', async function () {
-        const { token } = await contracts()
+    it('rejects a creation record whose transaction reverted', async function () {
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
+        const bridgeProxyRecord = await deployments.get('wTARIBridge_Proxy')
+        const creation = await ethers.provider.getTransaction(bridgeProxyRecord.transactionHash as string)
+
+        // Same factory call again: CREATE2 to an occupied address makes the factory revert.
+        let revertedHash = ''
+        try {
+            await deployer.sendTransaction({ to: creation.to, data: creation.data, gasLimit: 3_000_000 })
+        } catch {
+            // hardhat mines the reverted transaction and then throws
+        }
+        revertedHash = (await ethers.provider.getBlock('latest')).transactions[0]
+        expect((await ethers.provider.getTransactionReceipt(revertedHash)).status).to.equal(0)
+
+        await deployments.save('wTARIBridge_Proxy', { ...bridgeProxyRecord, transactionHash: revertedHash })
+        try {
+            await expectRejection(check(), `wTARIBridge: creation transaction ${revertedHash} did not succeed`)
+        } finally {
+            await deployments.save('wTARIBridge_Proxy', bridgeProxyRecord)
+        }
+        await check()
+    })
+
+    it('check:wtari keeps failing after a peer, enforced option, extra grant or stray mint', async function () {
+        const { token, controller } = await contracts()
         const asSafe = (fn: string, args: unknown[]) =>
             adminSafe.exec(token.address, token.interface.encodeFunctionData(fn, args))
         const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
@@ -704,10 +723,31 @@ describe('deploy:wtari dry run', function () {
         await asSafe('setEnforcedOptions', [[{ eid: 2, msgType: 1, options: '0x0003' }]])
         await expectRejection(check(), 'wTARI: EnforcedOptionSet emitted')
 
+        // A grant that is later revoked still fails: grant, mint, revoke cannot leave a clean holder set.
         const minterRole = ethers.utils.id('MINTER_ROLE')
+        await asSafe('grantRole', [minterRole, user.address])
+        const strayMint = await token.connect(user).mint(user.address, 1)
+        await asSafe('revokeRole', [minterRole, user.address])
+        await expectRejection(
+            check(),
+            `wTARI: MINTER_ROLE was granted to ${user.address}, which is not an expected holder`
+        )
+        await expectRejection(check(), `wTARI: mint in transaction ${strayMint.hash} was not sent to a mint Safe`)
+
         await asSafe('grantRole', [minterRole, deployer.address])
         await asSafe('revokeRole', [minterRole, deployer.address])
-        await expectRejection(check(), `deployer ${deployer.address} was granted MINTER_ROLE`)
+        await expectRejection(
+            check(),
+            `wTARI: MINTER_ROLE was granted to ${deployer.address}, which is not an expected holder`
+        )
+
+        // The controller's own grant must happen exactly once.
+        await asSafe('revokeRole', [minterRole, controller.address])
+        await asSafe('grantRole', [minterRole, controller.address])
+        await expectRejection(
+            check(),
+            'wTARI: MINTER_ROLE was granted 4 times; expected exactly once, to the controller'
+        )
     })
 })
 

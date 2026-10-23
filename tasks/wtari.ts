@@ -32,6 +32,8 @@ export interface WtariChainConfig {
 export interface SafeTransaction {
     to: string
     value: string
+    // Safe operation: 0 = CALL
+    operation: number
     data: string
     description: string
 }
@@ -89,6 +91,7 @@ const EVENTS = new ethers.utils.Interface([
     'event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)',
     'event PeerSet(uint32 eid, bytes32 peer)',
     'event EnforcedOptionSet(tuple(uint32 eid, uint16 msgType, bytes options)[] _enforcedOptions)',
+    'event Transfer(address indexed from, address indexed to, uint256 value)',
 ])
 // Many RPCs cap eth_getLogs ranges, so logs are fetched in chunks.
 const LOG_BLOCK_RANGE = 10_000
@@ -238,19 +241,21 @@ async function checkSafes(
 }
 
 /** Roles and ownership `account` holds on wTARI / wTARIController / wTARIProxyAdmin. */
-async function heldControl(hre: HardhatRuntimeEnvironment, account: string): Promise<string[]> {
+async function heldControl(token: Contract, controller: Contract, proxyAdmin: Contract, account: string) {
     const held: string[] = []
-    for (const name of ['wTARI', 'wTARIController']) {
+    for (const [name, contract] of [
+        ['wTARI', token],
+        ['wTARIController', controller],
+    ] as const) {
         for (const role of Object.keys(ROLE_NAMES)) {
-            if (await hre.deployments.read(name, 'hasRole', role, account)) {
-                held.push(`${name} ${ROLE_NAMES[role]}`)
-            }
+            if (await contract.hasRole(role, account)) held.push(`${name} ${ROLE_NAMES[role]}`)
         }
     }
-    for (const name of ['wTARI', PROXY_ADMIN_NAME]) {
-        if ((await hre.deployments.read(name, 'owner')).toLowerCase() === account.toLowerCase()) {
-            held.push(`${name} owner`)
-        }
+    for (const [name, contract] of [
+        ['wTARI', token],
+        [PROXY_ADMIN_NAME, proxyAdmin],
+    ] as const) {
+        if ((await contract.owner()).toLowerCase() === account.toLowerCase()) held.push(`${name} owner`)
     }
     return held
 }
@@ -286,12 +291,22 @@ export function minterGrantTransaction(tokenAddress: string, controllerAddress: 
     return {
         to: tokenAddress,
         value: '0',
+        operation: 0,
         data: new ethers.utils.Interface(['function grantRole(bytes32 role, address account)']).encodeFunctionData(
             'grantRole',
             [MINTER_ROLE, controllerAddress]
         ),
-        description: `wTARI(${tokenAddress}).grantRole(MINTER_ROLE ${MINTER_ROLE}, wTARIController ${controllerAddress})`,
+        description: `wTARI proxy ${tokenAddress} .grantRole(MINTER_ROLE ${MINTER_ROLE}, wTARIController proxy ${controllerAddress})`,
     }
+}
+
+export function printSafeTransaction(safe: string, tx: SafeTransaction) {
+    console.log(`Pending Safe transaction for proxyAdminOwner ${safe}:`)
+    console.log(`  to:        ${tx.to}`)
+    console.log(`  value:     ${tx.value}`)
+    console.log(`  operation: ${tx.operation} (CALL)`)
+    console.log(`  data:      ${tx.data}`)
+    console.log(`  what:      ${tx.description}`)
 }
 
 /**
@@ -370,34 +385,46 @@ export async function deployWtari(
     return minterGrantTransaction(token.address, controller.address)
 }
 
-/** Events of interest emitted by `address` since `fromBlock`, oldest first. */
-async function replayEvents(provider: providers.Provider, address: string, fromBlock: number) {
-    const topics = [EVENTS.fragments.map((fragment) => EVENTS.getEventTopic(fragment.name))]
+/** Logs of `address` matching `topics` since `fromBlock`, oldest first. */
+async function fetchLogs(
+    provider: providers.Provider,
+    address: string,
+    fromBlock: number,
+    topics: (string | string[])[]
+) {
     const latest = await provider.getBlockNumber()
-    const events: ethers.utils.LogDescription[] = []
+    const logs: providers.Log[] = []
     for (let start = fromBlock; start <= latest; start += LOG_BLOCK_RANGE) {
         const toBlock = Math.min(start + LOG_BLOCK_RANGE - 1, latest)
-        for (const log of await provider.getLogs({ address, topics, fromBlock: start, toBlock })) {
-            events.push(EVENTS.parseLog(log))
-        }
+        logs.push(...(await provider.getLogs({ address, topics, fromBlock: start, toBlock })))
     }
-    return events
+    return logs
 }
 
-/** Compares the role holders rebuilt from events against `expected` ([role, account] pairs). */
+/** Role, peer and enforced-option events emitted by `address` since `fromBlock`, oldest first. */
+async function replayEvents(provider: providers.Provider, address: string, fromBlock: number) {
+    const topics = [['RoleGranted', 'RoleRevoked', 'PeerSet', 'EnforcedOptionSet'].map((n) => EVENTS.getEventTopic(n))]
+    return (await fetchLogs(provider, address, fromBlock, topics)).map((log) => EVENTS.parseLog(log))
+}
+
+/**
+ * Every RoleGranted ever emitted must be for an expected [role, account] pair (a grant later revoked still
+ * counts), and every expected pair must be held according to the replayed events.
+ */
 function compareRoleHolders(name: string, events: ethers.utils.LogDescription[], expected: [string, string][]) {
+    const wanted = new Set(expected.map(([role, account]) => `${role}:${account.toLowerCase()}`))
     const holders = new Set<string>()
+    const failures: string[] = []
     for (const event of events) {
         const key = `${event.args.role}:${event.args.account?.toLowerCase()}`
-        if (event.name === 'RoleGranted') holders.add(key)
+        if (event.name === 'RoleGranted') {
+            holders.add(key)
+            if (!wanted.has(key)) {
+                const role = ROLE_NAMES[event.args.role] ?? event.args.role
+                failures.push(`${name}: ${role} was granted to ${event.args.account}, which is not an expected holder`)
+            }
+        }
         if (event.name === 'RoleRevoked') holders.delete(key)
-    }
-    const wanted = new Set(expected.map(([role, account]) => `${role}:${account.toLowerCase()}`))
-
-    const failures: string[] = []
-    for (const key of holders) {
-        const [role, account] = key.split(':')
-        if (!wanted.has(key)) failures.push(`${name}: unexpected ${ROLE_NAMES[role] ?? role} holder ${account}`)
     }
     for (const key of wanted) {
         const [role, account] = key.split(':')
@@ -423,6 +450,10 @@ async function creationTransaction(
         throw new Error(
             `${name}: transaction ${transactionHash} did not create ${expected.address} through the CREATE2 factory`
         )
+    }
+    // A reverted duplicate call with the same data would otherwise match.
+    if ((await provider.getTransactionReceipt(tx.hash))?.status !== 1) {
+        throw new Error(`${name}: creation transaction ${transactionHash} did not succeed`)
     }
     return { from: tx.from, blockNumber: tx.blockNumber }
 }
@@ -614,7 +645,7 @@ export async function checkWtariDeployment(
         preGrant?: boolean
     } = {}
 ) {
-    const { get, read } = hre.deployments
+    const { get } = hre.deployments
     const provider = hre.ethers.provider
     const failures: string[] = []
     const { chainId } = await provider.getNetwork()
@@ -637,11 +668,21 @@ export async function checkWtariDeployment(
         }
     }
 
-    const token = await get('wTARI')
-    const controller = await get('wTARIController')
-    const bridge = await get('wTARIBridge')
-    const proxyAdmin = await get(PROXY_ADMIN_NAME)
-    const minterGranted: boolean = await read('wTARI', 'hasRole', MINTER_ROLE, controller.address)
+    // From here on, every read goes through compiled ABIs at the CREATE2-proven addresses.
+    const token = new Contract(expected.wTARI.address, (await hre.artifacts.readArtifact('wTARI')).abi, provider)
+    const controller = new Contract(
+        expected.wTARIController.address,
+        (await hre.artifacts.readArtifact('wTARIController')).abi,
+        provider
+    )
+    const bridge = { address: expected.wTARIBridge.address }
+    const proxyAdmin = new Contract(expected[PROXY_ADMIN_NAME].address, ProxyAdmin.abi, provider)
+    const roleContracts: { [name: string]: Contract } = { wTARI: token, wTARIController: controller }
+    const minterGranted: boolean = await token.hasRole(MINTER_ROLE, controller.address)
+    if (!minterGranted && options.preGrant) {
+        // Computed here from the proven addresses, so signers can compare the queued Safe tx byte for byte.
+        printSafeTransaction(config.proxyAdminOwner, minterGrantTransaction(token.address, controller.address))
+    }
 
     const expectedRoles: [string, string, string][] = [
         ...(minterGranted || !options.preGrant
@@ -653,7 +694,7 @@ export async function checkWtariDeployment(
         ['wTARIController', DEFAULT_ADMIN_ROLE, config.proxyAdminOwner],
     ]
     for (const [name, role, account] of expectedRoles) {
-        if (!(await read(name, 'hasRole', role, account))) {
+        if (!(await roleContracts[name].hasRole(role, account))) {
             failures.push(
                 role === MINTER_ROLE
                     ? missingGrantMessage(token.address, controller.address)
@@ -665,19 +706,12 @@ export async function checkWtariDeployment(
         }
     }
 
-    // The deployer and start blocks come from the creation transactions on chain, not from the record.
-    const tokenCreation = await creationTransaction(
-        provider,
-        'wTARI',
-        (await get('wTARI_Proxy')).transactionHash,
-        expected.wTARI
-    )
-    const controllerCreation = await creationTransaction(
-        provider,
-        'wTARIController',
-        (await get('wTARIController_Proxy')).transactionHash,
-        expected.wTARIController
-    )
+    // The deployer and start blocks come from the proven, successful creation transactions.
+    const proxyCreation = async (name: 'wTARI' | 'wTARIController' | 'wTARIBridge') =>
+        creationTransaction(provider, name, (await get(`${name}_Proxy`)).transactionHash, expected[name])
+    const tokenCreation = await proxyCreation('wTARI')
+    const controllerCreation = await proxyCreation('wTARIController')
+    const bridgeCreation = await proxyCreation('wTARIBridge')
     const accounts = [tokenCreation.from]
     try {
         accounts.push((await hre.getNamedAccounts()).deployer)
@@ -686,20 +720,20 @@ export async function checkWtariDeployment(
     }
     for (const account of accounts) {
         if (!account) continue
-        for (const held of await heldControl(hre, account)) {
+        for (const held of await heldControl(token, controller, proxyAdmin, account)) {
             failures.push(`deployer ${account} holds ${held}`)
         }
     }
 
-    const owner = await read('wTARI', 'owner')
+    const owner = await token.owner()
     if (owner.toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
         failures.push(`wTARI: owner ${owner} is not proxyAdminOwner ${config.proxyAdminOwner}`)
     }
-    if ((await read(PROXY_ADMIN_NAME, 'owner')).toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
+    if ((await proxyAdmin.owner()).toLowerCase() !== config.proxyAdminOwner.toLowerCase()) {
         failures.push(`${PROXY_ADMIN_NAME}: owner is not proxyAdminOwner ${config.proxyAdminOwner}`)
     }
     // The endpoint is an immutable masked in the bytecode comparison, so check it via the getter.
-    const lzEndpoint = await read('wTARI', 'endpoint')
+    const lzEndpoint = await token.endpoint()
     if (lzEndpoint.toLowerCase() !== expectedLzEndpoint.toLowerCase()) {
         failures.push(`wTARI: endpoint() ${lzEndpoint} is not the official LayerZero endpoint ${expectedLzEndpoint}`)
     } else {
@@ -710,7 +744,7 @@ export async function checkWtariDeployment(
         }
     }
     for (const getter of ['msgInspector', 'preCrime']) {
-        const value = await read('wTARI', getter)
+        const value = await token[getter]()
         if (value !== ethers.constants.AddressZero) failures.push(`wTARI: ${getter} is set to ${value}`)
     }
 
@@ -728,11 +762,19 @@ export async function checkWtariDeployment(
             expectedRoles.filter(([name]) => name === 'wTARIController').map(([, role, account]) => [role, account])
         )
     )
-    for (const event of [...tokenEvents, ...controllerEvents]) {
-        if (event.name === 'RoleGranted' && event.args.account.toLowerCase() === tokenCreation.from.toLowerCase()) {
-            failures.push(
-                `deployer ${tokenCreation.from} was granted ${ROLE_NAMES[event.args.role] ?? event.args.role}`
-            )
+    const minterGrants = tokenEvents.filter((e) => e.name === 'RoleGranted' && e.args.role === MINTER_ROLE)
+    if (minterGrants.length !== (minterGranted ? 1 : 0)) {
+        failures.push(
+            `wTARI: MINTER_ROLE was granted ${minterGrants.length} times; expected exactly once, to the controller`
+        )
+    }
+    // Every mint must come from a mint Safe's transaction (which reaches wTARI only through the controller).
+    const mintTopics = [EVENTS.getEventTopic('Transfer'), ethers.utils.hexZeroPad('0x', 32)]
+    const mintSafes = [config.mintLowSafe.toLowerCase(), config.mintHighSafe.toLowerCase()]
+    for (const log of await fetchLogs(provider, token.address, tokenCreation.blockNumber, mintTopics)) {
+        const tx = await provider.getTransaction(log.transactionHash)
+        if (!mintSafes.includes(tx.to?.toLowerCase() ?? '')) {
+            failures.push(`wTARI: mint in transaction ${log.transactionHash} was not sent to a mint Safe`)
         }
     }
     for (const event of tokenEvents) {
@@ -760,8 +802,11 @@ export async function checkWtariDeployment(
                 `proxy ${deployment.address}: admin ${admin} is not ${PROXY_ADMIN_NAME} ${proxyAdmin.address}`
             )
         }
-        if (implementation.toLowerCase() !== deployment.implementation?.toLowerCase()) {
-            failures.push(`proxy ${deployment.address}: implementation ${implementation} differs from the record`)
+        const expectedImplementation = expected[`${contractName}_Implementation`].address
+        if (implementation.toLowerCase() !== expectedImplementation.toLowerCase()) {
+            failures.push(
+                `proxy ${deployment.address}: implementation ${implementation} is not ${expectedImplementation}`
+            )
         }
         if (
             !(await sameRuntimeCode(
@@ -813,15 +858,15 @@ export async function checkWtariDeployment(
     }
 
     // Token metadata and the EIP-712 domain used by receiveWithAuthorization.
-    const decimals: number = await read('wTARI', 'decimals')
+    const decimals: number = await token.decimals()
     for (const [getter, value, wanted] of [
-        ['name', await read('wTARI', 'name'), 'WrappedTARI'],
-        ['symbol', await read('wTARI', 'symbol'), 'wTARI'],
+        ['name', await token.name(), 'WrappedTARI'],
+        ['symbol', await token.symbol(), 'wTARI'],
         ['decimals', decimals, 18],
     ]) {
         if (value !== wanted) failures.push(`wTARI: ${getter}() is ${value}, not ${wanted}`)
     }
-    const domain = await read('wTARI', 'eip712Domain')
+    const domain = await token.eip712Domain()
     if (
         domain.name !== 'wTARI' ||
         domain.version !== '1' ||
@@ -832,20 +877,20 @@ export async function checkWtariDeployment(
             `wTARI: EIP-712 domain ${domain.name} ${domain.version} ${domain.chainId} ${domain.verifyingContract} is not wTARI 1 ${chainId} ${token.address}`
         )
     }
-    const sharedDecimals: number = await read('wTARI', 'sharedDecimals')
-    const conversionRate = await read('wTARI', 'decimalConversionRate')
+    const sharedDecimals: number = await token.sharedDecimals()
+    const conversionRate = await token.decimalConversionRate()
     if (!conversionRate.eq(ethers.BigNumber.from(10).pow(decimals - sharedDecimals))) {
         failures.push(`wTARI: decimalConversionRate ${conversionRate} is not 10^(decimals - sharedDecimals)`)
     }
 
     // Before the controller can mint, nothing can have been minted.
-    const totalSupply = await read('wTARI', 'totalSupply')
+    const totalSupply = await token.totalSupply()
     if (!minterGranted && !totalSupply.isZero()) {
         failures.push(`wTARI: totalSupply ${totalSupply} is not 0 before the controller holds MINTER_ROLE`)
     }
     console.log(`wTARI totalSupply: ${ethers.utils.formatEther(totalSupply)}`)
 
-    const limit = await read('wTARIController', 'lowMintDailyLimit')
+    const limit = await controller.lowMintDailyLimit()
     if (!limit.eq(ethers.utils.parseEther(String(config.lowMintDailyLimit)))) {
         failures.push(
             `wTARIController: lowMintDailyLimit ${ethers.utils.formatEther(limit)} is not ${config.lowMintDailyLimit}`
@@ -856,6 +901,7 @@ export async function checkWtariDeployment(
         throw new Error(`wTARI deployment check failed:\n${failures.join('\n')}`)
     }
     console.log('wTARI deployment check passed')
+    return { bridgeStartBlock: bridgeCreation.blockNumber }
 }
 
 // Every contract deploy:wtari creates, by hardhat-deploy record name.
@@ -977,7 +1023,7 @@ function assertProductionRpc(config: WtariChainConfig) {
     }
 }
 
-function referenceProviderFor(config: WtariChainConfig) {
+export function referenceProviderFor(config: WtariChainConfig) {
     const rpcUrl = process.env[config.referenceRpcUrlEnv]
     if (!rpcUrl) throw new Error(`${config.referenceRpcUrlEnv} is not set`)
     return new providers.JsonRpcProvider(rpcUrl)
@@ -1013,15 +1059,11 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
             // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
             await checkWtariDeployment(hre, config, referenceProvider, { preGrant: pending !== undefined })
-            // Printed before verification, which can fail on its own and must not hide this.
+            // The pre-grant check printed the pending Safe transaction, before verification can fail.
             if (pending) {
-                console.log(`Pending Safe transaction for proxyAdminOwner ${config.proxyAdminOwner}:`)
-                console.log(`  to:    ${pending.to}`)
-                console.log(`  value: ${pending.value}`)
-                console.log(`  data:  ${pending.data}`)
-                console.log(`  what:  ${pending.description}`)
                 console.log(
-                    'Before signing, a Safe signer should run check:wtari --pre-grant, ideally on a second machine.'
+                    'Before signing, a Safe signer runs check:wtari --pre-grant on a second machine (with its own RPC)' +
+                        ' and compares the queued Safe transaction byte for byte with the one it prints.'
                 )
             }
             if (hre.network.name !== 'hardhat') await verifyWtariContracts(hre, config)
