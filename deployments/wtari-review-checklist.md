@@ -24,11 +24,17 @@ The deployer never holds any power: wTARI is initialized with the proxy-admin Sa
 
 ## Post-deploy Safe transaction
 
-Because only the proxy-admin Safe is wTARI admin, `deploy:wtari` cannot grant the controller `MINTER_ROLE`. It prints the pending transaction (to = wTARI proxy, value 0, data = `grantRole(MINTER_ROLE, wTARIController)`) and finishes. Execute it from the proxy-admin Safe, then run `check:wtari`, which fails until the grant exists.
+Because only the proxy-admin Safe is wTARI admin, `deploy:wtari` cannot grant the controller `MINTER_ROLE`. It first runs the full check in pre-grant mode (only that grant may be missing, and `totalSupply()` must be 0), then prints the pending transaction (to = wTARI proxy, value 0, data = `grantRole(MINTER_ROLE, wTARIController)`) and finishes.
+
+Before any Safe owner signs, a Safe signer runs `npm run check:wtari -- --chain <chainId> --pre-grant`, ideally on a second machine, and it must pass. After the Safe executes the transaction, run `check:wtari` without `--pre-grant`; it fails until the grant exists.
+
+- [ ] `check:wtari --pre-grant` passed on a Safe signer's machine before signing (who / when: )
 
 - [ ] Pending `grantRole(MINTER_ROLE, wTARIController)` Safe transaction executed (Safe tx hash: )
 
 ## Checks
+
+`check:wtari` also proves how every contract was created: it recomputes each record's CREATE2 address from the compiled creation code, the fixed salts, the pinned LayerZero endpoint and the config (initializer calldata built by the same function `deploy:wtari` uses), requires the CREATE2 factory to have the deterministic-deployment-proxy code, and requires the creation transactions to be calls to that factory with exactly that salt and init code. It also checks: every immutable of the implementations is on an explicit allow-list checked via its getter (`endpoint`, `decimalConversionRate == 10^(decimals - sharedDecimals)`); `name()` `WrappedTARI`, `symbol()` `wTARI`, `decimals()` 18; the EIP-712 domain (`wTARI`, `1`, this chain id, the wTARI proxy); `totalSupply()` 0 while the controller lacks `MINTER_ROLE` (printed afterwards).
 
 - [ ] Clones differ from their wXTM sources by names, the `wTARI` symbol, and only these intentional changes (`npm run test:hardhat`, "wTARI clones", which lists them exactly):
   - wTARIController: a budget for `mintLowAmount` per fixed 24h window (`block.timestamp / 1 days`), not a rolling one, so up to 2x the limit can be minted across a window boundary (`lowMintDailyLimit`, set at initialize from `lowMintDailyLimit` in `deploy/wtari/<chainId>.json` in whole tokens, changeable by `DEFAULT_ADMIN_ROLE` via `setLowMintDailyLimit`, event `LowMintDailyLimitSet`, error `LowMintDailyLimitExceeded`).
@@ -57,7 +63,18 @@ Because only the proxy-admin Safe is wTARI admin, `deploy:wtari` cannot grant th
 
 ## Adding a chain
 
-A new chain needs only `deploy/wtari/<chainId>.json`. The chain must also be listed by the pinned `@safe-global/safe-deployments` devDependency; if it is not, `deploy:wtari` and `check:wtari` refuse with `not an official Safe singleton on chain <chainId>`. The fix is bumping that devDependency in `package.json` (and `npm install`), not a code change.
+A new chain needs `deploy/wtari/<chainId>.json` plus these pinned trust anchors:
+
+- The chain must be listed by the pinned `@safe-global/safe-deployments` devDependency (exact version). If it is not, `deploy:wtari` and `check:wtari` refuse with `not an official Safe singleton on chain <chainId>`; the fix is bumping that devDependency, not a code change.
+- The chain's LayerZero EndpointV2 must be pinned in `LZ_ENDPOINTS` in `tasks/wtari.ts`, keyed by eid with its chain id; otherwise both tasks refuse with `pin the endpoint for eid <eid> in tasks/wtari.ts`. The pin must agree with the exactly pinned `@layerzerolabs/lz-evm-sdk-v2`, and the config's `network.eid` must belong to the chain. This is a reviewed code change.
+- Safes on a SafeProxy version other than v1.3.0 / v1.4.1 / v1.5.0 need their proxy runtime code hash added to `SAFE_PROXY_CODE_HASHES` in `tasks/wtari.ts`.
+
+## Accepted residual risks
+
+- Reference Safe owners are compared by address only. An owner that is itself a contract (e.g. another Safe) is only as trustworthy as its own configuration.
+- An explorer's "already verified" result is accepted when the published compiler version and contract name match ours; the full published source is not compared.
+- Burns are 18-decimal, Tari amounts are 6-decimal: the off-chain processor must handle the sub-1e12 remainder of a burned amount (inherited from wXTM).
+- A genuine SafeProxy can still have been set up through a setup-time delegatecall that leaves hidden owner state; `check:wtari` cannot see storage the Safe does not expose (R2-3).
 
 ## Recovery: CREATE2 address already taken
 

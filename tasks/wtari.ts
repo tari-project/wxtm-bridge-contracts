@@ -255,6 +255,45 @@ async function heldControl(hre: HardhatRuntimeEnvironment, account: string): Pro
     return held
 }
 
+// CREATE2 salts; each contract's implementation and proxy use its salt, wTARIProxyAdmin uses wTARI's.
+export const SALTS = {
+    wTARI: ethers.utils.id('wTARI-v0.0.1'),
+    wTARIController: ethers.utils.id('wTARIController-v0.0.1'),
+    wTARIBridge: ethers.utils.id('wTARIBridge-v0.0.1'),
+}
+
+/** initialize() arguments of the three proxies, shared by deployWtari and check:wtari so they cannot drift. */
+export function tokenInitializeArgs(config: WtariChainConfig) {
+    return ['WrappedTARI', 'wTARI', '1', config.proxyAdminOwner]
+}
+
+/** initialize() arguments of the controller and bridge proxies, which point at the wTARI proxy. */
+export function initializeArgs(config: WtariChainConfig, tokenAddress: string) {
+    return {
+        wTARIController: [
+            tokenAddress,
+            config.mintLowSafe,
+            config.mintHighSafe,
+            config.proxyAdminOwner,
+            ethers.utils.parseEther(String(config.lowMintDailyLimit)),
+        ],
+        wTARIBridge: [tokenAddress],
+    }
+}
+
+/** The pending grantRole(MINTER_ROLE, controller) transaction the proxyAdminOwner Safe must execute. */
+export function minterGrantTransaction(tokenAddress: string, controllerAddress: string): SafeTransaction {
+    return {
+        to: tokenAddress,
+        value: '0',
+        data: new ethers.utils.Interface(['function grantRole(bytes32 role, address account)']).encodeFunctionData(
+            'grantRole',
+            [MINTER_ROLE, controllerAddress]
+        ),
+        description: `wTARI(${tokenAddress}).grantRole(MINTER_ROLE ${MINTER_ROLE}, wTARIController ${controllerAddress})`,
+    }
+}
+
 /**
  * Deploys the three proxies with the proxyAdminOwner Safe as owner, LZ delegate and admin from the first
  * block. Returns the Safe transaction still needed to grant the controller MINTER_ROLE, if any.
@@ -286,37 +325,26 @@ export async function deployWtari(
     const token = await deploy('wTARI', {
         from: deployer,
         args: [lzEndpoint],
-        deterministicDeployment: ethers.utils.id('wTARI-v0.0.1'),
+        deterministicDeployment: SALTS.wTARI,
         log: true,
         waitConfirmations: config.confirmations,
         proxy: {
             ...proxy,
             viaAdminContract: { name: PROXY_ADMIN_NAME, artifact: ProxyAdmin },
-            execute: {
-                init: { methodName: 'initialize', args: ['WrappedTARI', 'wTARI', '1', config.proxyAdminOwner] },
-            },
+            execute: { init: { methodName: 'initialize', args: tokenInitializeArgs(config) } },
         },
     })
 
     const controller = await deploy('wTARIController', {
         from: deployer,
         args: [],
-        deterministicDeployment: ethers.utils.id('wTARIController-v0.0.1'),
+        deterministicDeployment: SALTS.wTARIController,
         log: true,
         waitConfirmations: config.confirmations,
         proxy: {
             ...proxy,
             execute: {
-                init: {
-                    methodName: 'initialize',
-                    args: [
-                        token.address,
-                        config.mintLowSafe,
-                        config.mintHighSafe,
-                        config.proxyAdminOwner,
-                        ethers.utils.parseEther(String(config.lowMintDailyLimit)),
-                    ],
-                },
+                init: { methodName: 'initialize', args: initializeArgs(config, token.address).wTARIController },
             },
         },
     })
@@ -324,12 +352,12 @@ export async function deployWtari(
     const bridge = await deploy('wTARIBridge', {
         from: deployer,
         args: [],
-        deterministicDeployment: ethers.utils.id('wTARIBridge-v0.0.1'),
+        deterministicDeployment: SALTS.wTARIBridge,
         log: true,
         waitConfirmations: config.confirmations,
         proxy: {
             ...proxy,
-            execute: { init: { methodName: 'initialize', args: [token.address] } },
+            execute: { init: { methodName: 'initialize', args: initializeArgs(config, token.address).wTARIBridge } },
         },
     })
 
@@ -339,21 +367,7 @@ export async function deployWtari(
 
     // Only the Safe holds wTARI admin, so only the Safe can let the controller mint.
     if (await read('wTARI', 'hasRole', MINTER_ROLE, controller.address)) return undefined
-    const pending: SafeTransaction = {
-        to: token.address,
-        value: '0',
-        data: new ethers.utils.Interface(['function grantRole(bytes32 role, address account)']).encodeFunctionData(
-            'grantRole',
-            [MINTER_ROLE, controller.address]
-        ),
-        description: `wTARI(${token.address}).grantRole(MINTER_ROLE ${MINTER_ROLE}, wTARIController ${controller.address})`,
-    }
-    console.log(`Pending Safe transaction for proxyAdminOwner ${config.proxyAdminOwner}:`)
-    console.log(`  to:    ${pending.to}`)
-    console.log(`  value: ${pending.value}`)
-    console.log(`  data:  ${pending.data}`)
-    console.log(`  what:  ${pending.description}`)
-    return pending
+    return minterGrantTransaction(token.address, controller.address)
 }
 
 /** Events of interest emitted by `address` since `fromBlock`, oldest first. */
@@ -393,10 +407,22 @@ function compareRoleHolders(name: string, events: ethers.utils.LogDescription[],
 }
 
 /** The creation transaction of a deployment record, read from the chain (not from the record). */
-async function creationTransaction(provider: providers.Provider, name: string, transactionHash?: string) {
+async function creationTransaction(
+    provider: providers.Provider,
+    name: string,
+    transactionHash: string | undefined,
+    expected: ExpectedCreation
+) {
     const tx = transactionHash ? await provider.getTransaction(transactionHash) : null
     if (!tx || tx.blockNumber == null) {
         throw new Error(`${name}: creation transaction ${transactionHash} not found on chain`)
+    }
+    // A forged record hash must not move the deployer or the replay start block.
+    const expectedData = ethers.utils.hexConcat([expected.salt, expected.initCode]).toLowerCase()
+    if (tx.to?.toLowerCase() !== CREATE2_FACTORY || tx.data.toLowerCase() !== expectedData) {
+        throw new Error(
+            `${name}: transaction ${transactionHash} did not create ${expected.address} through the CREATE2 factory`
+        )
     }
     return { from: tx.from, blockNumber: tx.blockNumber }
 }
@@ -423,11 +449,10 @@ async function compiledContract(hre: HardhatRuntimeEnvironment, contractName: st
     // storageLayout gives decimal slot strings; getStorageAt needs a number or hex.
     for (const entry of output.storageLayout.storage)
         slots[entry.label] = ethers.BigNumber.from(entry.slot).toHexString()
-    return {
-        code: `0x${output.evm.deployedBytecode.object}`,
-        immutableReferences: (output.evm.deployedBytecode.immutableReferences ?? {}) as ImmutableReferences,
-        slots,
-    }
+    const immutableReferences = (output.evm.deployedBytecode.immutableReferences ?? {}) as ImmutableReferences
+    const asts = Object.values(buildInfo?.output.sources ?? {}).map((source) => source.ast)
+    const immutableNames = Object.keys(immutableReferences).map((id) => declarationName(asts, Number(id)) ?? `#${id}`)
+    return { code: `0x${output.evm.deployedBytecode.object}`, immutableReferences, immutableNames, slots }
 }
 
 async function sameRuntimeCode(
@@ -440,9 +465,128 @@ async function sameRuntimeCode(
     return maskImmutables(onChain, immutableReferences) === maskImmutables(compiledCode, immutableReferences)
 }
 
-/** The official EndpointV2 for a LayerZero endpoint id. */
-export function officialLzEndpoint(eid: number) {
-    return getDeploymentAddressAndAbi(endpointIdToNetwork(eid as EndpointId), 'EndpointV2').address
+// Pinned EndpointV2 per LayerZero eid, with the chain id that eid belongs to. A new chain needs a pin here.
+const LZ_ENDPOINTS: { [eid: number]: { chainId: number; endpoint: string } } = {
+    30101: { chainId: 1, endpoint: '0x1a44076050125825900e736c501f859c50fE728c' },
+    40161: { chainId: 11155111, endpoint: '0x6EDCE65403992e310A62460808c4b910D972f10f' },
+    30184: { chainId: 8453, endpoint: '0x1a44076050125825900e736c501f859c50fE728c' },
+    40245: { chainId: 84532, endpoint: '0x6EDCE65403992e310A62460808c4b910D972f10f' },
+}
+
+/** The official EndpointV2 for `eid` on `chainId`: the pin, which the LayerZero package must agree with. */
+export function officialLzEndpoint(eid: number, chainId: number) {
+    const pin = LZ_ENDPOINTS[eid]
+    if (!pin)
+        throw new Error(
+            `No pinned LayerZero endpoint for eid ${eid}: pin the endpoint for eid ${eid} in tasks/wtari.ts`
+        )
+    if (pin.chainId !== chainId)
+        throw new Error(`LayerZero eid ${eid} belongs to chain ${pin.chainId}, not chain ${chainId}`)
+    const packaged = getDeploymentAddressAndAbi(endpointIdToNetwork(eid as EndpointId), 'EndpointV2').address
+    if (packaged.toLowerCase() !== pin.endpoint.toLowerCase()) {
+        throw new Error(
+            `@layerzerolabs/lz-evm-sdk-v2 endpoint ${packaged} for eid ${eid} differs from the pin ${pin.endpoint}`
+        )
+    }
+    return pin.endpoint
+}
+
+// Arachnid's deterministic-deployment-proxy, hardhat-deploy's default CREATE2 factory (calldata = salt ‖ initcode).
+const CREATE2_FACTORY = '0x4e59b44847b379578588920ca78fbf26c0b4956c'
+// Immutables per implementation; each is masked in the bytecode comparison and checked via its getter.
+const CHECKED_IMMUTABLES: { [contractName: string]: string[] } = {
+    wTARI: ['endpoint', 'decimalConversionRate'],
+}
+const CREATE2_FACTORY_RUNTIME =
+    '0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3'
+
+interface ExpectedCreation {
+    address: string
+    salt: string
+    initCode: string
+}
+
+function create2(salt: string, initCode: string): ExpectedCreation {
+    const address = ethers.utils.getCreate2Address(CREATE2_FACTORY, salt, ethers.utils.keccak256(initCode))
+    return { address, salt, initCode }
+}
+
+/** Every wTARI deployment record's CREATE2 address, recomputed from compiled code, salts and config. */
+export async function expectedWtariCreations(
+    hre: HardhatRuntimeEnvironment,
+    config: WtariChainConfig,
+    lzEndpoint: string
+) {
+    const coder = ethers.utils.defaultAbiCoder
+    const proxyInitCode = (implementation: string, admin: string, abi: unknown[], args: unknown[]) =>
+        ethers.utils.hexConcat([
+            TransparentUpgradeableProxy.bytecode,
+            coder.encode(
+                ['address', 'address', 'bytes'],
+                [
+                    implementation,
+                    admin,
+                    new ethers.utils.Interface(abi as string[]).encodeFunctionData('initialize', args),
+                ]
+            ),
+        ])
+    const tokenArtifact = await hre.artifacts.readArtifact('wTARI')
+    const controllerArtifact = await hre.artifacts.readArtifact('wTARIController')
+    const bridgeArtifact = await hre.artifacts.readArtifact('wTARIBridge')
+
+    const admin = create2(
+        SALTS.wTARI,
+        ethers.utils.hexConcat([ProxyAdmin.bytecode, coder.encode(['address'], [config.proxyAdminOwner])])
+    )
+    const tokenImplementation = create2(
+        SALTS.wTARI,
+        ethers.utils.hexConcat([tokenArtifact.bytecode, coder.encode(['address'], [lzEndpoint])])
+    )
+    const token = create2(
+        SALTS.wTARI,
+        proxyInitCode(tokenImplementation.address, admin.address, tokenArtifact.abi, tokenInitializeArgs(config))
+    )
+    const args = initializeArgs(config, token.address)
+    const controllerImplementation = create2(SALTS.wTARIController, controllerArtifact.bytecode)
+    const controller = create2(
+        SALTS.wTARIController,
+        proxyInitCode(controllerImplementation.address, admin.address, controllerArtifact.abi, args.wTARIController)
+    )
+    const bridgeImplementation = create2(SALTS.wTARIBridge, bridgeArtifact.bytecode)
+    const bridge = create2(
+        SALTS.wTARIBridge,
+        proxyInitCode(bridgeImplementation.address, admin.address, bridgeArtifact.abi, args.wTARIBridge)
+    )
+    return {
+        [PROXY_ADMIN_NAME]: admin,
+        wTARI: token,
+        wTARI_Proxy: token,
+        wTARI_Implementation: tokenImplementation,
+        wTARIController: controller,
+        wTARIController_Proxy: controller,
+        wTARIController_Implementation: controllerImplementation,
+        wTARIBridge: bridge,
+        wTARIBridge_Proxy: bridge,
+        wTARIBridge_Implementation: bridgeImplementation,
+    }
+}
+
+/** Name of the state variable with AST id `id`, searched through the build's source ASTs. */
+function declarationName(node: unknown, id: number): string | undefined {
+    if (Array.isArray(node)) {
+        for (const child of node) {
+            const found = declarationName(child, id)
+            if (found) return found
+        }
+    } else if (node && typeof node === 'object') {
+        const declaration = node as { id?: number; nodeType?: string; name?: string }
+        if (declaration.id === id && declaration.nodeType === 'VariableDeclaration') return declaration.name
+        for (const value of Object.values(node)) {
+            const found = declarationName(value, id)
+            if (found) return found
+        }
+    }
+    return undefined
 }
 
 /** Post-deploy review of Safes, roles, ownership, LZ config, bytecode and proxy slots. */
@@ -450,22 +594,46 @@ export async function checkWtariDeployment(
     hre: HardhatRuntimeEnvironment,
     config: WtariChainConfig,
     referenceProvider: providers.Provider,
-    // Only for the local hardhat network, where the endpoint is a mock.
-    expectedLzEndpoint = officialLzEndpoint(config.network.eid)
+    options: {
+        // Only for the local hardhat network, where the endpoint is a mock.
+        expectedLzEndpoint?: string
+        // deploy:wtari before the Safe grants the controller MINTER_ROLE: that grant may be missing.
+        preGrant?: boolean
+    } = {}
 ) {
     const { get, read } = hre.deployments
     const provider = hre.ethers.provider
     const failures: string[] = []
+    const { chainId } = await provider.getNetwork()
+    const expectedLzEndpoint = options.expectedLzEndpoint ?? officialLzEndpoint(config.network.eid, chainId)
 
     await checkSafes(provider, referenceProvider, config)
+
+    // Every record must be at the CREATE2 address implied by our compiled code, salts and config. CREATE2 ties
+    // the address to the exact creation code, so nothing else can have run at construction.
+    if ((await provider.getCode(CREATE2_FACTORY)).toLowerCase() !== CREATE2_FACTORY_RUNTIME) {
+        throw new Error(`CREATE2 factory ${CREATE2_FACTORY} does not have the deterministic-deployment-proxy code`)
+    }
+    const expected = await expectedWtariCreations(hre, config, expectedLzEndpoint)
+    for (const [name, creation] of Object.entries(expected)) {
+        const record = await get(name)
+        if (record.address.toLowerCase() !== creation.address.toLowerCase()) {
+            throw new Error(
+                `${name}: record address ${record.address} is not the expected CREATE2 address ${creation.address}`
+            )
+        }
+    }
 
     const token = await get('wTARI')
     const controller = await get('wTARIController')
     const bridge = await get('wTARIBridge')
     const proxyAdmin = await get(PROXY_ADMIN_NAME)
+    const minterGranted: boolean = await read('wTARI', 'hasRole', MINTER_ROLE, controller.address)
 
     const expectedRoles: [string, string, string][] = [
-        ['wTARI', MINTER_ROLE, controller.address],
+        ...(minterGranted || !options.preGrant
+            ? [['wTARI', MINTER_ROLE, controller.address] as [string, string, string]]
+            : []),
         ['wTARI', DEFAULT_ADMIN_ROLE, config.proxyAdminOwner],
         ['wTARIController', LOW_MINTER_ROLE, config.mintLowSafe],
         ['wTARIController', HIGH_MINTER_ROLE, config.mintHighSafe],
@@ -485,8 +653,18 @@ export async function checkWtariDeployment(
     }
 
     // The deployer and start blocks come from the creation transactions on chain, not from the record.
-    const tokenCreation = await creationTransaction(provider, 'wTARI', token.transactionHash)
-    const controllerCreation = await creationTransaction(provider, 'wTARIController', controller.transactionHash)
+    const tokenCreation = await creationTransaction(
+        provider,
+        'wTARI',
+        (await get('wTARI_Proxy')).transactionHash,
+        expected.wTARI
+    )
+    const controllerCreation = await creationTransaction(
+        provider,
+        'wTARIController',
+        (await get('wTARIController_Proxy')).transactionHash,
+        expected.wTARIController
+    )
     const accounts = [tokenCreation.from]
     try {
         accounts.push((await hre.getNamedAccounts()).deployer)
@@ -585,6 +763,12 @@ export async function checkWtariDeployment(
             )
         }
         const compiled = await compiledContract(hre, contractName)
+        // Immutables are masked in the comparison, so each one must be checked through its getter below.
+        for (const name of compiled.immutableNames) {
+            if (!(CHECKED_IMMUTABLES[contractName] ?? []).includes(name)) {
+                failures.push(`${contractName}: immutable ${name} is not checked by check:wtari`)
+            }
+        }
         if (!(await sameRuntimeCode(provider, implementation, compiled.code, compiled.immutableReferences))) {
             failures.push(
                 `${contractName} implementation ${implementation}: runtime bytecode differs from the compiled artifact`
@@ -609,6 +793,46 @@ export async function checkWtariDeployment(
             failures.push(`${contractName}: token pointer ${pointer} is not the wTARI proxy ${token.address}`)
         }
     }
+
+    for (const [name, refs] of [
+        ['TransparentUpgradeableProxy', TransparentUpgradeableProxy.evm.deployedBytecode.immutableReferences],
+        [PROXY_ADMIN_NAME, ProxyAdmin.evm.deployedBytecode.immutableReferences],
+    ] as const) {
+        if (Object.keys(refs).length > 0) failures.push(`${name}: has immutables that check:wtari does not check`)
+    }
+
+    // Token metadata and the EIP-712 domain used by receiveWithAuthorization.
+    const decimals: number = await read('wTARI', 'decimals')
+    for (const [getter, value, wanted] of [
+        ['name', await read('wTARI', 'name'), 'WrappedTARI'],
+        ['symbol', await read('wTARI', 'symbol'), 'wTARI'],
+        ['decimals', decimals, 18],
+    ]) {
+        if (value !== wanted) failures.push(`wTARI: ${getter}() is ${value}, not ${wanted}`)
+    }
+    const domain = await read('wTARI', 'eip712Domain')
+    if (
+        domain.name !== 'wTARI' ||
+        domain.version !== '1' ||
+        !domain.chainId.eq(chainId) ||
+        domain.verifyingContract.toLowerCase() !== token.address.toLowerCase()
+    ) {
+        failures.push(
+            `wTARI: EIP-712 domain ${domain.name} ${domain.version} ${domain.chainId} ${domain.verifyingContract} is not wTARI 1 ${chainId} ${token.address}`
+        )
+    }
+    const sharedDecimals: number = await read('wTARI', 'sharedDecimals')
+    const conversionRate = await read('wTARI', 'decimalConversionRate')
+    if (!conversionRate.eq(ethers.BigNumber.from(10).pow(decimals - sharedDecimals))) {
+        failures.push(`wTARI: decimalConversionRate ${conversionRate} is not 10^(decimals - sharedDecimals)`)
+    }
+
+    // Before the controller can mint, nothing can have been minted.
+    const totalSupply = await read('wTARI', 'totalSupply')
+    if (!minterGranted && !totalSupply.isZero()) {
+        failures.push(`wTARI: totalSupply ${totalSupply} is not 0 before the controller holds MINTER_ROLE`)
+    }
+    console.log(`wTARI totalSupply: ${ethers.utils.formatEther(totalSupply)}`)
 
     const limit = await read('wTARIController', 'lowMintDailyLimit')
     if (!limit.eq(ethers.utils.parseEther(String(config.lowMintDailyLimit)))) {
@@ -774,12 +998,19 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
             }
             const referenceProvider = referenceProviderFor(config)
 
-            const pending = await deployWtari(hre, config, officialLzEndpoint(config.network.eid), referenceProvider)
-            if (!pending) await checkWtariDeployment(hre, config, referenceProvider)
+            const lzEndpoint = officialLzEndpoint(config.network.eid, chain)
+            const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
+            // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
+            await checkWtariDeployment(hre, config, referenceProvider, { preGrant: pending !== undefined })
             if (hre.network.name !== 'hardhat') await verifyWtariContracts(hre, config)
             if (pending) {
+                console.log(`Pending Safe transaction for proxyAdminOwner ${config.proxyAdminOwner}:`)
+                console.log(`  to:    ${pending.to}`)
+                console.log(`  value: ${pending.value}`)
+                console.log(`  data:  ${pending.data}`)
+                console.log(`  what:  ${pending.description}`)
                 console.log(
-                    'deploy:wtari done, with one pending Safe transaction (above). Run check:wtari after it executes.'
+                    'Before signing, a Safe signer should run check:wtari --pre-grant, ideally on a second machine.'
                 )
             }
         })
@@ -797,11 +1028,15 @@ task('verify:wtari', 'Verify all wTARI contracts on the chain explorer (Ethersca
 
 task('check:wtari', 'Check wTARI Safes, roles, ownership, LZ config, bytecode and proxies on the --network chain')
     .addParam('chain', 'Target chain id (must match --network)', undefined, types.int)
-    .setAction(async ({ chain }: { chain: number }, hre) => {
+    .addFlag(
+        'preGrant',
+        'Allow the pending grantRole(MINTER_ROLE, controller) to be missing (review before signing it)'
+    )
+    .setAction(async ({ chain, preGrant }: { chain: number; preGrant: boolean }, hre) => {
         const config = readWtariConfig(chain)
         await withRedactedRpcUrls(config, async () => {
             await assertChain(hre, chain)
             assertProductionRpc(config)
-            await checkWtariDeployment(hre, config, referenceProviderFor(config))
+            await checkWtariDeployment(hre, config, referenceProviderFor(config), { preGrant })
         })
     })

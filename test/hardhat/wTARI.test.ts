@@ -16,6 +16,7 @@ import {
     checkWtariDeployment,
     deployWtari,
     etherscanVerify,
+    officialLzEndpoint,
     readWtariConfig,
     safeSingletons,
     verifyWtariContracts,
@@ -151,6 +152,15 @@ describe('wTARI config files', function () {
         }
         expect(readWtariConfig(8453).production).to.equal(true)
         expect(readWtariConfig(84532).production).to.equal(false)
+    })
+
+    it('pin the LayerZero endpoint per eid and tie each eid to its chain', function () {
+        expect(officialLzEndpoint(40245, 84532)).to.equal('0x6EDCE65403992e310A62460808c4b910D972f10f')
+        expect(officialLzEndpoint(30184, 8453)).to.equal('0x1a44076050125825900e736c501f859c50fE728c')
+        expect(() => officialLzEndpoint(40245, 8453)).to.throw(
+            'LayerZero eid 40245 belongs to chain 84532, not chain 8453'
+        )
+        expect(() => officialLzEndpoint(40231, 421614)).to.throw('pin the endpoint for eid 40231 in tasks/wtari.ts')
     })
 
     it('take the allowed Safe singletons for each chain from @safe-global/safe-deployments', function () {
@@ -443,16 +453,62 @@ describe('deploy:wtari dry run', function () {
         expect(await token.owner()).to.equal(adminSafe.address)
 
         await expectRejection(
-            checkWtariDeployment(hre, config, ethers.provider, endpoint.address),
+            checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address }),
             'the controller does not have MINTER_ROLE yet; execute the pending Safe transaction'
         )
+        // What a Safe signer runs before signing: everything else must already pass.
+        await checkWtariDeployment(hre, config, ethers.provider, {
+            expectedLzEndpoint: endpoint.address,
+            preGrant: true,
+        })
 
         await adminSafe.exec(pending?.to, pending?.data)
-        await checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
+        await checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
 
         // A second run is a no-op with nothing pending.
         expect(await deployWtari(hre, config, endpoint.address, ethers.provider)).to.equal(undefined)
-        await checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
+        await checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
+    })
+
+    it('requires every record at its recomputed CREATE2 address, created through the factory', async function () {
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
+        const { token } = await contracts()
+
+        // A bridge proxy with the real implementation and admin but different init args.
+        const bridgeRecord = await deployments.get('wTARIBridge')
+        const proxyArtifact = JSON.parse(
+            fs.readFileSync(
+                path.join(ROOT, 'node_modules/hardhat-deploy/extendedArtifacts/TransparentUpgradeableProxy.json'),
+                'utf8'
+            )
+        )
+        const bridgeInterface = new ethers.utils.Interface(bridgeRecord.abi)
+        const impostor = await new ContractFactory(proxyArtifact.abi, proxyArtifact.bytecode, deployer).deploy(
+            bridgeRecord.implementation,
+            (await deployments.get('wTARIProxyAdmin')).address,
+            bridgeInterface.encodeFunctionData('initialize', [user.address])
+        )
+        await deployments.save('wTARIBridge', { ...bridgeRecord, address: impostor.address })
+        try {
+            await expectRejection(
+                check(),
+                `wTARIBridge: record address ${impostor.address} is not the expected CREATE2 address ${bridgeRecord.address}`
+            )
+        } finally {
+            await deployments.save('wTARIBridge', bridgeRecord)
+        }
+
+        // A forged creation transaction hash cannot move the deployer or the replay start block.
+        const tokenProxyRecord = await deployments.get('wTARI_Proxy')
+        const otherTx = (await deployments.get('wTARIController_Proxy')).transactionHash
+        await deployments.save('wTARI_Proxy', { ...tokenProxyRecord, transactionHash: otherTx })
+        try {
+            await expectRejection(check(), `wTARI: transaction ${otherTx} did not create ${token.address}`)
+        } finally {
+            await deployments.save('wTARI_Proxy', tokenProxyRecord)
+        }
+
+        await check()
     })
 
     it('never gives the deployer any role or ownership', async function () {
@@ -548,7 +604,7 @@ describe('deploy:wtari dry run', function () {
         const { token, controller } = await contracts()
         const asSafe = (contract: Contract, fn: string, args: unknown[]) =>
             adminSafe.exec(contract.address, contract.interface.encodeFunctionData(fn, args))
-        const check = () => checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
         const minterRole = ethers.utils.id('MINTER_ROLE')
 
         await asSafe(token, 'grantRole', [minterRole, user.address])
@@ -605,10 +661,10 @@ describe('deploy:wtari dry run', function () {
         )
         await setStorage(controller.address, 0, token.address)
 
-        // The endpoint must be the official one for the chain, whatever the record says.
+        // An implementation built for another endpoint is not at the expected CREATE2 address.
         await expectRejection(
-            checkWtariDeployment(hre, config, ethers.provider, user.address),
-            `wTARI: endpoint() ${endpoint.address} is not the official LayerZero endpoint ${user.address}`
+            checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: user.address }),
+            'is not the expected CREATE2 address'
         )
 
         await check()
@@ -618,7 +674,7 @@ describe('deploy:wtari dry run', function () {
         const { token } = await contracts()
         const asSafe = (fn: string, args: unknown[]) =>
             adminSafe.exec(token.address, token.interface.encodeFunctionData(fn, args))
-        const check = () => checkWtariDeployment(hre, config, ethers.provider, endpoint.address)
+        const check = () => checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
 
         await asSafe('setPeer', [2, ethers.utils.hexZeroPad(user.address, 32)])
         await asSafe('setPeer', [2, ethers.constants.HashZero])
