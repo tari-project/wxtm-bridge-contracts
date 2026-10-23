@@ -404,10 +404,16 @@ describe('deploy:wtari dry run', function () {
     it('rejects the placeholder Base configs', async function () {
         for (const chainId of [84532, 8453]) {
             const placeholder = { ...readWtariConfig(chainId), referenceChainId: 31337 }
-            await expectRejection(
-                deployWtari(hre, placeholder, endpoint.address, ethers.provider),
-                'has no code on the target chain'
-            )
+            // Base mainnet is production; set its RPC env var so the Safe check is what rejects it.
+            process.env[placeholder.network.rpcUrlEnv] = 'http://unused'
+            try {
+                await expectRejection(
+                    deployWtari(hre, placeholder, endpoint.address, ethers.provider),
+                    'has no code on the target chain'
+                )
+            } finally {
+                delete process.env[placeholder.network.rpcUrlEnv]
+            }
         }
     })
 
@@ -448,6 +454,16 @@ describe('deploy:wtari dry run', function () {
             { proxyAdminOwner: (await makeSafe(owners, 1)).address },
             'proxyAdminOwner threshold 1 must be at least 2'
         )
+    })
+
+    it('refuses a production deploy without an explicit RPC before sending anything', async function () {
+        const blockBefore = await ethers.provider.getBlockNumber()
+        await expectRejection(
+            deployWtari(hre, { ...config, production: true }, endpoint.address, ethers.provider),
+            'UNUSED_RPC_URL must be set for a production chain'
+        )
+        expect(await ethers.provider.getBlockNumber()).to.equal(blockBefore)
+        expect(await deployments.getOrNull('wTARI')).to.not.be.ok
     })
 
     it('rejects a reference provider on the wrong chain', async function () {

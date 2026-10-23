@@ -372,6 +372,8 @@ export async function deployWtari(
     const { deploy, read } = hre.deployments
     const provider = hre.ethers.provider
 
+    // Before any transaction: a production chain must not deploy through the public fallback RPC.
+    assertProductionRpc(config)
     await checkSafes(provider, referenceProvider, config)
     await checkHasCode(provider, 'LayerZero endpoint', lzEndpoint)
 
