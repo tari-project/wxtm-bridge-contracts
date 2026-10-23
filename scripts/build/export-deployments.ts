@@ -38,7 +38,7 @@ async function exportDeploymentsAddresses(path_directory: string) {
         })
         return bridgeStartBlock
     })
-    if (wtariFailed) console.warn(`WARNING: no wTARI entries are exported for chain ${chainId}.`)
+    if (wtariFailed) console.warn(`WARNING: new wTARI entries for chain ${chainId} were not exported.`)
 
     exported[chainId] = entry
     fs.writeFileSync(file, JSON.stringify(exported, null, 2))

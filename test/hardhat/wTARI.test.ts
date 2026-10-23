@@ -759,6 +759,15 @@ describe('deploy:wtari dry run', function () {
             `wTARI: mint in transaction ${strayMint.hash} was not part of a mint Safe execution`
         )
 
+        // A mint executed by a Safe that is not a mint Safe (here the admin Safe) is not a mint Safe execution.
+        await asSafe('grantRole', [minterRole, adminSafe.address])
+        const adminMint = await asSafe('mint', [user.address, 1])
+        await asSafe('revokeRole', [minterRole, adminSafe.address])
+        await expectRejection(
+            check(),
+            `wTARI: mint in transaction ${adminMint.hash} was not part of a mint Safe execution`
+        )
+
         await asSafe('grantRole', [minterRole, deployer.address])
         await asSafe('revokeRole', [minterRole, deployer.address])
         await expectRejection(
@@ -771,7 +780,7 @@ describe('deploy:wtari dry run', function () {
         await asSafe('grantRole', [minterRole, controller.address])
         await expectRejection(
             check(),
-            'wTARI: MINTER_ROLE was granted 4 times; expected exactly once, to the controller'
+            'wTARI: MINTER_ROLE was granted 5 times; expected exactly once, to the controller'
         )
     })
 })
@@ -834,13 +843,19 @@ describe('export-deployments wTARI gate', function () {
         expect(wtariFailed).to.equal(false)
     })
 
-    it('omits every wTARI key but keeps the rest when the check fails, also for a partial set', async function () {
+    it('keeps the last good wTARI set when the check of a changed set fails, also for a partial set', async function () {
         const previous = { wXTM: '0x01', wTARI: '0x99', wTARIBridgeStartBlock: 7 }
         for (const records of [wtari, { wTARI: '0x0a', wTARIController: '0x0b' }]) {
             const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...records }, failing)
-            expect(entry).to.deep.equal(wxtm)
+            expect(entry).to.deep.equal({ ...wxtm, wTARI: '0x99', wTARIBridgeStartBlock: 7 })
             expect(wtariFailed).to.equal(true)
         }
+    })
+
+    it('omits every wTARI key when the check fails and nothing was exported before', async function () {
+        const { entry, wtariFailed } = await exportedChainEntry({ wXTM: '0x01' }, { ...wxtm, ...wtari }, failing)
+        expect(entry).to.deep.equal(wxtm)
+        expect(wtariFailed).to.equal(true)
     })
 
     it('keeps an unchanged, already exported wTARI set without re-running the check', async function () {

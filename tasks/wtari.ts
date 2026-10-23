@@ -1056,8 +1056,8 @@ export type ExportedEntry = { [key: string]: string | number }
 /**
  * One chain's entry for the package's deployments.json. Every record named wTARI* belongs to the wTARI set,
  * exported only as a whole: unchanged addresses keep what was exported (and checked) before; new or changed
- * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. Other
- * records are always exported.
+ * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes, and if it
+ * fails the last good (previously exported) set is kept. Other records are always exported.
  */
 export async function exportedChainEntry(
     previous: ExportedEntry,
@@ -1092,7 +1092,8 @@ export async function exportedChainEntry(
         Object.assign(entry, wtariAddresses, { wTARIBridgeStartBlock: bridgeStartBlock })
         return { entry, wtariFailed: false }
     } catch (e) {
-        console.warn(`WARNING: check:wtari failed; wTARI entries are not exported.\n${(e as Error).message}`)
+        console.warn(`WARNING: check:wtari failed; the new wTARI entries are not exported.\n${(e as Error).message}`)
+        for (const [key, value] of previousWtari) entry[key] = value
         return { entry, wtariFailed: true }
     }
 }
