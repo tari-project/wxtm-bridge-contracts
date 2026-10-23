@@ -28,7 +28,7 @@
   },
   "resolutions": {
     "ethers": "^5.7.2",
-    "hardhat-deploy": "^0.12.1"
+    "hardhat-deploy": "0.12.4"
   },
   "devDependencies": {
     "@babel/core": "^7.23.9",
@@ -71,7 +71,7 @@
     "ethers": "^5.7.2",
     "hardhat": "^2.22.10",
     "hardhat-contract-sizer": "^2.10.0",
-    "hardhat-deploy": "^0.12.1",
+    "hardhat-deploy": "0.12.4",
     "mocha": "^10.2.0",
     "prettier": "^3.2.5",
     "solhint": "^4.1.1",
@@ -85,12 +85,12 @@
   "pnpm": {
     "overrides": {
       "ethers": "^5.7.2",
-      "hardhat-deploy": "^0.12.1"
+      "hardhat-deploy": "0.12.4"
     }
   },
   "overrides": {
     "ethers": "^5.7.2",
-    "hardhat-deploy": "^0.12.1",
+    "hardhat-deploy": "0.12.4",
     "form-data": "^4.0.4"
   }
 }
