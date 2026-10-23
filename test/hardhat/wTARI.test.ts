@@ -16,6 +16,8 @@ import {
     checkWtariDeployment,
     deployWtari,
     etherscanVerify,
+    exportedChainEntry,
+    fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
     safeSingletons,
@@ -592,6 +594,26 @@ describe('deploy:wtari dry run', function () {
         expect((await token.balanceOf(user.address)).toNumber()).to.equal(0)
     })
 
+    it('accepts a relayed mint Safe execution (transaction sent to a relayer, not the Safe)', async function () {
+        const { controller } = await contracts()
+        // A relayer contract (here a plain SafeMock) temporarily added as a third owner of the low Safe.
+        const relayer = await safeMockFactory.connect(safeOwner).deploy(SAFE_SINGLETON, [safeOwner.address], 1)
+        const ownersStart = ethers.BigNumber.from(ethers.utils.keccak256(toWord(1)))
+        await setStorage(lowSafe.address, 1, 3)
+        await setStorage(lowSafe.address, ownersStart.add(2).toHexString(), relayer.address)
+
+        const mintData = controller.interface.encodeFunctionData('mintLowAmount', [user.address, 1])
+        const relayed = await relayer.exec(
+            lowSafe.address,
+            lowSafe.interface.encodeFunctionData('exec', [controller.address, mintData])
+        )
+        expect((await relayed.wait()).to).to.equal(relayer.address)
+
+        await setStorage(lowSafe.address, ownersStart.add(2).toHexString(), 0)
+        await setStorage(lowSafe.address, 1, 2)
+        await checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: endpoint.address })
+    })
+
     it('verifyWtariContracts fails loudly, listing every unverified contract', async function () {
         const stub = await startExplorerStub({
             verifysourcecode: { status: '0', message: 'NOTOK', result: 'Invalid API Key' },
@@ -732,7 +754,10 @@ describe('deploy:wtari dry run', function () {
             check(),
             `wTARI: MINTER_ROLE was granted to ${user.address}, which is not an expected holder`
         )
-        await expectRejection(check(), `wTARI: mint in transaction ${strayMint.hash} was not sent to a mint Safe`)
+        await expectRejection(
+            check(),
+            `wTARI: mint in transaction ${strayMint.hash} was not part of a mint Safe execution`
+        )
 
         await asSafe('grantRole', [minterRole, deployer.address])
         await asSafe('revokeRole', [minterRole, deployer.address])
@@ -748,6 +773,81 @@ describe('deploy:wtari dry run', function () {
             check(),
             'wTARI: MINTER_ROLE was granted 4 times; expected exactly once, to the controller'
         )
+    })
+})
+
+describe('log scan', function () {
+    // An RPC that rejects ranges over 1000 blocks and returns one fake log per accepted chunk.
+    const rangeLimitedRpc = (latest: number) => {
+        const ranges: [number, number][] = []
+        return {
+            ranges,
+            getBlockNumber: async () => latest,
+            send: async (_method: string, [filter]: [{ fromBlock: string; toBlock: string }]) => {
+                const from = Number(filter.fromBlock)
+                const to = Number(filter.toBlock)
+                if (to - from + 1 > 1000) throw new Error('query exceeds max block range 1000')
+                ranges.push([from, to])
+                return [{ blockNumber: to }]
+            },
+        }
+    }
+
+    it('halves the chunk on a range-limit error and covers every block exactly once', async function () {
+        const rpc = rangeLimitedRpc(25_000)
+        const logs = await fetchLogs(rpc, ['0x01'], 5, [])
+        expect(rpc.ranges[0]).to.deep.equal([5, 629])
+        expect(rpc.ranges[rpc.ranges.length - 1][1]).to.equal(25_000)
+        for (let i = 1; i < rpc.ranges.length; i++) expect(rpc.ranges[i][0]).to.equal(rpc.ranges[i - 1][1] + 1)
+        expect(logs).to.have.length(rpc.ranges.length)
+    })
+
+    it('rethrows other RPC errors', async function () {
+        const rpc = {
+            getBlockNumber: async () => 10,
+            send: async () => {
+                throw new Error('connection refused')
+            },
+        }
+        await expectRejection(fetchLogs(rpc, ['0x01'], 0, []), 'connection refused')
+    })
+})
+
+describe('export-deployments wTARI gate', function () {
+    const wxtm = { wXTM: '0x01', DefaultProxyAdmin: '0x02' }
+    const wtari = { wTARI: '0x0a', wTARIController: '0x0b', wTARIBridge: '0x0c' }
+    const passing = async () => 123
+    const failing = async (): Promise<number> => {
+        throw new Error('check failed')
+    }
+
+    it('exports wXTM-only networks unchanged and keeps earlier wTARI keys when there are no wTARI records', async function () {
+        const previous = { wXTM: '0x01', wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
+        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, failing)
+        expect(entry).to.deep.equal({ ...previous, ...wxtm })
+        expect(wtariFailed).to.equal(false)
+    })
+
+    it('exports a new wTARI set only after the check passes, with the proven start block', async function () {
+        const { entry, wtariFailed } = await exportedChainEntry({}, { ...wxtm, ...wtari }, passing)
+        expect(entry).to.deep.equal({ ...wxtm, ...wtari, wTARIBridgeStartBlock: 123 })
+        expect(wtariFailed).to.equal(false)
+    })
+
+    it('omits every wTARI key but keeps the rest when the check fails, also for a partial set', async function () {
+        const previous = { wXTM: '0x01', wTARI: '0x99', wTARIBridgeStartBlock: 7 }
+        for (const records of [wtari, { wTARI: '0x0a', wTARIController: '0x0b' }]) {
+            const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...records }, failing)
+            expect(entry).to.deep.equal(wxtm)
+            expect(wtariFailed).to.equal(true)
+        }
+    })
+
+    it('keeps an unchanged, already exported wTARI set without re-running the check', async function () {
+        const previous = { ...wxtm, ...wtari, wTARIBridgeStartBlock: 7 }
+        const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...wtari }, failing)
+        expect(entry).to.deep.equal(previous)
+        expect(wtariFailed).to.equal(false)
     })
 })
 

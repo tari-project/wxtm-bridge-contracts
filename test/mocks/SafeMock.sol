@@ -4,6 +4,9 @@ pragma solidity ^0.8.22;
 /// @dev Minimal stand-in for a Gnosis Safe proxy: singleton in slot 0, owners/threshold/modules getters
 /// and an owner-only call forwarder.
 contract SafeMock {
+    // Same signature as a real Safe (v1.3+), which emits it for every successful Safe transaction.
+    event ExecutionSuccess(bytes32 txHash, uint256 payment);
+
     address private singleton;
     address[] private owners;
     uint256 private threshold;
@@ -45,6 +48,7 @@ contract SafeMock {
                 revert(add(result, 32), mload(result))
             }
         }
+        emit ExecutionSuccess(keccak256(data), 0);
         return result;
     }
 }

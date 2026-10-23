@@ -93,8 +93,11 @@ const EVENTS = new ethers.utils.Interface([
     'event EnforcedOptionSet(tuple(uint32 eid, uint16 msgType, bytes options)[] _enforcedOptions)',
     'event Transfer(address indexed from, address indexed to, uint256 value)',
 ])
-// Many RPCs cap eth_getLogs ranges, so logs are fetched in chunks.
+// Many RPCs cap eth_getLogs ranges, so logs are fetched in chunks, halved on a range/size error.
 const LOG_BLOCK_RANGE = 10_000
+const MIN_LOG_BLOCK_RANGE = 100
+// Emitted by a Safe (v1.3+) for every successful Safe transaction.
+const SAFE_EXECUTION_SUCCESS = ethers.utils.id('ExecutionSuccess(bytes32,uint256)')
 
 /** Official Safe and SafeL2 singletons for `chainId`, from @safe-global/safe-deployments (lowercase). */
 export function safeSingletons(chainId: number): string[] {
@@ -385,26 +388,51 @@ export async function deployWtari(
     return minterGrantTransaction(token.address, controller.address)
 }
 
-/** Logs of `address` matching `topics` since `fromBlock`, oldest first. */
-async function fetchLogs(
-    provider: providers.Provider,
-    address: string,
+/**
+ * Raw logs of `addresses` matching `topics` from `fromBlock` to the latest block, oldest first. Uses
+ * eth_getLogs directly so one query can cover several addresses.
+ */
+export async function fetchLogs(
+    provider: Pick<providers.JsonRpcProvider, 'getBlockNumber' | 'send'>,
+    addresses: string[],
     fromBlock: number,
     topics: (string | string[])[]
 ) {
     const latest = await provider.getBlockNumber()
     const logs: providers.Log[] = []
-    for (let start = fromBlock; start <= latest; start += LOG_BLOCK_RANGE) {
-        const toBlock = Math.min(start + LOG_BLOCK_RANGE - 1, latest)
-        logs.push(...(await provider.getLogs({ address, topics, fromBlock: start, toBlock })))
+    let range = LOG_BLOCK_RANGE
+    let start = fromBlock
+    while (start <= latest) {
+        const toBlock = Math.min(start + range - 1, latest)
+        try {
+            const chunk: providers.Log[] = await provider.send('eth_getLogs', [
+                {
+                    address: addresses,
+                    topics,
+                    fromBlock: ethers.utils.hexValue(start),
+                    toBlock: ethers.utils.hexValue(toBlock),
+                },
+            ])
+            logs.push(...chunk)
+            start = toBlock + 1
+        } catch (e) {
+            const tooLarge = /range|limit|too many|exceed|size/i.test((e as Error).message)
+            if (!tooLarge || range <= MIN_LOG_BLOCK_RANGE) throw e
+            range = Math.max(MIN_LOG_BLOCK_RANGE, Math.floor(range / 2))
+        }
     }
     return logs
 }
 
-/** Role, peer and enforced-option events emitted by `address` since `fromBlock`, oldest first. */
-async function replayEvents(provider: providers.Provider, address: string, fromBlock: number) {
-    const topics = [['RoleGranted', 'RoleRevoked', 'PeerSet', 'EnforcedOptionSet'].map((n) => EVENTS.getEventTopic(n))]
-    return (await fetchLogs(provider, address, fromBlock, topics)).map((log) => EVENTS.parseLog(log))
+/** Fetches transaction receipts, at most 8 at a time. */
+async function fetchReceipts(provider: providers.Provider, hashes: string[]) {
+    const receipts: providers.TransactionReceipt[] = []
+    for (let i = 0; i < hashes.length; i += 8) {
+        receipts.push(
+            ...(await Promise.all(hashes.slice(i, i + 8).map((hash) => provider.getTransactionReceipt(hash))))
+        )
+    }
+    return receipts
 }
 
 /**
@@ -748,8 +776,18 @@ export async function checkWtariDeployment(
         if (value !== ethers.constants.AddressZero) failures.push(`wTARI: ${getter} is set to ${value}`)
     }
 
-    const tokenEvents = await replayEvents(provider, token.address, tokenCreation.blockNumber)
-    const controllerEvents = await replayEvents(provider, controller.address, controllerCreation.blockNumber)
+    // Two scans in total: role / peer / enforced-option events of both contracts, and wTARI mints.
+    const fromBlock = Math.min(tokenCreation.blockNumber, controllerCreation.blockNumber)
+    const eventTopics = [
+        ['RoleGranted', 'RoleRevoked', 'PeerSet', 'EnforcedOptionSet'].map((n) => EVENTS.getEventTopic(n)),
+    ]
+    const eventLogs = await fetchLogs(provider, [token.address, controller.address], fromBlock, eventTopics)
+    const eventsOf = (address: string) =>
+        eventLogs
+            .filter((log) => log.address.toLowerCase() === address.toLowerCase())
+            .map((log) => EVENTS.parseLog(log))
+    const tokenEvents = eventsOf(token.address)
+    const controllerEvents = eventsOf(controller.address)
     failures.push(
         ...compareRoleHolders(
             'wTARI',
@@ -768,13 +806,17 @@ export async function checkWtariDeployment(
             `wTARI: MINTER_ROLE was granted ${minterGrants.length} times; expected exactly once, to the controller`
         )
     }
-    // Every mint must come from a mint Safe's transaction (which reaches wTARI only through the controller).
+    // Every mint must be in a transaction where a mint Safe executed (ExecutionSuccess), also when relayed.
     const mintTopics = [EVENTS.getEventTopic('Transfer'), ethers.utils.hexZeroPad('0x', 32)]
     const mintSafes = [config.mintLowSafe.toLowerCase(), config.mintHighSafe.toLowerCase()]
-    for (const log of await fetchLogs(provider, token.address, tokenCreation.blockNumber, mintTopics)) {
-        const tx = await provider.getTransaction(log.transactionHash)
-        if (!mintSafes.includes(tx.to?.toLowerCase() ?? '')) {
-            failures.push(`wTARI: mint in transaction ${log.transactionHash} was not sent to a mint Safe`)
+    const mintLogs = await fetchLogs(provider, [token.address], tokenCreation.blockNumber, mintTopics)
+    const mintHashes = [...new Set(mintLogs.map((log) => log.transactionHash))]
+    for (const receipt of await fetchReceipts(provider, mintHashes)) {
+        const safeExecuted = receipt.logs.some(
+            (log) => mintSafes.includes(log.address.toLowerCase()) && log.topics[0] === SAFE_EXECUTION_SUCCESS
+        )
+        if (!safeExecuted) {
+            failures.push(`wTARI: mint in transaction ${receipt.transactionHash} was not part of a mint Safe execution`)
         }
     }
     for (const event of tokenEvents) {
@@ -1006,6 +1048,52 @@ export async function verifyWtariContracts(hre: HardhatRuntimeEnvironment, confi
         throw new Error(
             `Deployment is complete but these contracts are not verified (re-run verify:wtari):\n${unverified.join('\n')}`
         )
+    }
+}
+
+export type ExportedEntry = { [key: string]: string | number }
+
+/**
+ * One chain's entry for the package's deployments.json. Every record named wTARI* belongs to the wTARI set,
+ * exported only as a whole: unchanged addresses keep what was exported (and checked) before; new or changed
+ * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. Other
+ * records are always exported.
+ */
+export async function exportedChainEntry(
+    previous: ExportedEntry,
+    addresses: { [name: string]: string },
+    check: () => Promise<number>
+) {
+    const entry: ExportedEntry = {}
+    for (const [key, value] of Object.entries(previous)) {
+        if (!key.startsWith('wTARI')) entry[key] = value
+    }
+    const wtariAddresses: ExportedEntry = {}
+    for (const [name, address] of Object.entries(addresses)) {
+        if (name.startsWith('wTARI')) wtariAddresses[name] = address
+        else entry[name] = address
+    }
+
+    const previousWtari = Object.entries(previous).filter(([key]) => key.startsWith('wTARI'))
+    const previousAddresses = previousWtari.filter(([key]) => key !== 'wTARIBridgeStartBlock')
+    const unchanged =
+        previous.wTARIBridgeStartBlock !== undefined &&
+        previousAddresses.length === Object.keys(wtariAddresses).length &&
+        previousAddresses.every(([key, value]) => wtariAddresses[key] === value)
+
+    // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
+    // not block exports of an unchanged set.
+    if (Object.keys(wtariAddresses).length === 0 || unchanged) {
+        for (const [key, value] of previousWtari) entry[key] = value
+        return { entry, wtariFailed: false }
+    }
+    try {
+        const bridgeStartBlock = await check()
+        Object.assign(entry, wtariAddresses, { wTARIBridgeStartBlock: bridgeStartBlock })
+        return { entry, wtariFailed: false }
+    } catch (e) {
+        console.warn(`WARNING: check:wtari failed; wTARI entries are not exported.\n${(e as Error).message}`)
+        return { entry, wtariFailed: true }
     }
 }
 
