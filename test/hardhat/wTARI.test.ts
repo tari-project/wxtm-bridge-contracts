@@ -22,6 +22,7 @@ import {
     fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
+    safeFallbackHandlers,
     safeSingletons,
     safeTxHashes,
     uncheckedImmutables,
@@ -176,16 +177,24 @@ describe('wTARI config files', function () {
         expect(uncheckedImmutables('wTARIBridge', ['anything'])).to.deep.equal(['anything'])
     })
 
-    it('take the allowed Safe singletons for each chain from @safe-global/safe-deployments', function () {
+    it('take the allowed Safe singletons and fallback handlers for each chain from @safe-global/safe-deployments', function () {
         for (const chainId of [8453, 84532]) {
             const singletons = safeSingletons(chainId)
             // v1.3.0 canonical + eip155, v1.4.1, and v1.5.0 where listed.
             expect(singletons).to.include('0x69f4d1788e39c87893c980c06edf4b7f686e2938')
             expect(singletons).to.include('0xfb1bffc9d739b8d520daf37df666da4c687191ea')
             expect(singletons).to.include('0x29fcb43b46531bca003ddc8fcb67ffe91900c762')
+
+            const handlers = safeFallbackHandlers(chainId)
+            expect(handlers).to.include('0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4')
+            expect(handlers).to.include('0xfd0732dc9e303f09fcef3a7388ad10a83459ec99')
+            expect(handlers).to.include('0x017062a1de2fe6b99be3d9d37841fed19f573804')
+            // ExtensibleFallbackHandler (v1.5.0) must not be allowed.
+            expect(handlers).to.not.include('0x2f55e8b20d0b9fefa187aa7d00b6cbe563605bf5')
         }
         expect(safeSingletons(8453)).to.include('0xedd160febbd92e350d4d398fb636302fccd67c7e')
         expect(safeSingletons(999999)).to.deep.equal([])
+        expect(safeFallbackHandlers(999999)).to.deep.equal([])
     })
 
     it('reject configs that could leak secrets or drop production protections', function () {
@@ -383,6 +392,12 @@ describe('deploy:wtari dry run', function () {
             mintHighSafe: (await makeSafe(owners, 2)).address,
         }
         lowSafe = await makeSafe([user.address, safeOwner.address], 2)
+        // Standard Safes deployed via the official factory configure CompatibilityFallbackHandler.
+        await setStorage(
+            lowSafe.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            '0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99'
+        )
         highSafe = await makeSafe(owners, 2)
         adminSafe = await makeSafe(owners, 2)
 
@@ -446,6 +461,13 @@ describe('deploy:wtari dry run', function () {
         const withModuleGuard = await makeSafe(owners, 2)
         await setStorage(withModuleGuard.address, ethers.utils.id('module_manager.module_guard.address'), user.address)
         await reject({ mintHighSafe: withModuleGuard.address }, 'has a module guard set')
+
+        const withCustomFallback = await makeSafe(owners, 2)
+        await setStorage(withCustomFallback.address, ethers.utils.id('fallback_manager.handler.address'), user.address)
+        await reject(
+            { mintHighSafe: withCustomFallback.address },
+            'is not an official Safe fallback handler on chain 31337'
+        )
 
         const fakeSingleton = await makeSafe(owners, 2, user.address)
         await reject({ mintHighSafe: fakeSingleton.address }, 'is not an official Safe singleton on chain 31337')
@@ -748,6 +770,16 @@ describe('deploy:wtari dry run', function () {
             `wTARIController: token pointer ${user.address.toLowerCase()} is not the wTARI proxy ${token.address}`
         )
         await setStorage(controller.address, 0, token.address)
+
+        // A Safe fallback handler pointing at wTARIController would let anyone call mintHighAmount as the Safe.
+        const fallbackSlot = ethers.utils.id('fallback_manager.handler.address')
+        await setStorage(highSafe.address, fallbackSlot, controller.address)
+        await controller.attach(highSafe.address).connect(user).callStatic.mintHighAmount(user.address, 1)
+        await expectRejection(
+            check(),
+            `mintHighSafe ${highSafe.address} fallback handler ${controller.address.toLowerCase()} is not an official Safe fallback handler on chain 31337`
+        )
+        await setStorage(highSafe.address, fallbackSlot, ethers.constants.AddressZero)
 
         // An implementation built for another endpoint is not at the expected CREATE2 address.
         await expectRejection(
