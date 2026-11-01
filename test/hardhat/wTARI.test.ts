@@ -565,6 +565,17 @@ describe('deploy:wtari dry run', function () {
             await deployments.save('wTARI_Proxy', tokenProxyRecord)
         }
 
+        // Implementation and ProxyAdmin creation transactions are verified too, not just the 3 proxies.
+        for (const recordName of ['wTARIProxyAdmin', 'wTARI_Implementation'] as const) {
+            const record = await deployments.get(recordName)
+            await deployments.save(recordName, { ...record, transactionHash: otherTx })
+            try {
+                await expectRejection(check(), `${recordName}: transaction ${otherTx} did not create ${record.address}`)
+            } finally {
+                await deployments.save(recordName, record)
+            }
+        }
+
         await check()
     })
 
@@ -825,12 +836,25 @@ describe('deploy:wtari dry run', function () {
             `wTARI: MINTER_ROLE was granted to ${deployer.address}, which is not an expected holder`
         )
 
+        // A mint above HIGH_MINT_THRESHOLD (100,000 wTARI) executed by lowSafe (without highSafe) fails.
+        await asSafe('grantRole', [minterRole, lowSafe.address])
+        const overThreshold = ethers.utils.parseEther('100001')
+        const lowHighMint = await lowSafe.exec(
+            token.address,
+            token.interface.encodeFunctionData('mint', [user.address, overThreshold])
+        )
+        await asSafe('revokeRole', [minterRole, lowSafe.address])
+        await expectRejection(
+            check(),
+            `wTARI: high mint in transaction ${lowHighMint.hash} was not part of a mintHighSafe execution`
+        )
+
         // The controller's own grant must happen exactly once.
         await asSafe('revokeRole', [minterRole, controller.address])
         await asSafe('grantRole', [minterRole, controller.address])
         await expectRejection(
             check(),
-            'wTARI: MINTER_ROLE was granted 5 times; expected exactly once, to the controller'
+            'wTARI: MINTER_ROLE was granted 6 times; expected exactly once, to the controller'
         )
     })
 })
@@ -1025,6 +1049,11 @@ describe('export-deployments wTARI gate', function () {
         const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...wtari }, 7, failing)
         expect(entry).to.deep.equal(previous)
         expect(wtariFailed).to.equal(false)
+
+        // An unchanged partial set is still rejected rather than bypassed as unchanged.
+        const partialPrevious = { ...wxtm, wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
+        const partialRes = await exportedChainEntry(partialPrevious, { ...wxtm, wTARI: '0x0a' }, 7, passing)
+        expect(partialRes.wtariFailed).to.equal(true)
     })
 
     it('requires the config bridgeStartBlock, equal to the proven block, before exporting wTARI keys', async function () {

@@ -78,6 +78,7 @@ const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
 const MINTER_ROLE = ethers.utils.id('MINTER_ROLE')
 const LOW_MINTER_ROLE = ethers.utils.id('LOW_MINTER_ROLE')
 const HIGH_MINTER_ROLE = ethers.utils.id('HIGH_MINTER_ROLE')
+const HIGH_MINT_THRESHOLD = ethers.utils.parseEther('100000')
 const ROLE_NAMES: { [role: string]: string } = {
     [DEFAULT_ADMIN_ROLE]: 'DEFAULT_ADMIN_ROLE',
     [MINTER_ROLE]: 'MINTER_ROLE',
@@ -839,23 +840,46 @@ export async function checkWtariDeployment(
         }
     }
 
-    // The deployer and start blocks come from the proven, successful creation transactions.
+    // The deployer and start blocks come from the proven, successful creation transactions of all 7 records.
     const proxyCreation = async (name: 'wTARI' | 'wTARIController' | 'wTARIBridge') =>
         creationTransaction(provider, name, (await get(`${name}_Proxy`)).transactionHash, expected[name])
+    const recordCreation = async (
+        name:
+            | typeof PROXY_ADMIN_NAME
+            | 'wTARI_Implementation'
+            | 'wTARIController_Implementation'
+            | 'wTARIBridge_Implementation'
+    ) => creationTransaction(provider, name, (await get(name)).transactionHash, expected[name])
     const tokenCreation = await proxyCreation('wTARI')
     const controllerCreation = await proxyCreation('wTARIController')
     const bridgeCreation = await proxyCreation('wTARIBridge')
+    const otherCreations = await Promise.all([
+        recordCreation(PROXY_ADMIN_NAME),
+        recordCreation('wTARI_Implementation'),
+        recordCreation('wTARIController_Implementation'),
+        recordCreation('wTARIBridge_Implementation'),
+    ])
     console.log(`wTARIBridge proxy creation block (bridgeStartBlock): ${bridgeCreation.blockNumber}`)
     if (config.bridgeStartBlock !== undefined && config.bridgeStartBlock !== bridgeCreation.blockNumber) {
         failures.push(
             `config bridgeStartBlock ${config.bridgeStartBlock} is not the bridge proxy creation block ${bridgeCreation.blockNumber}`
         )
     }
-    const accounts = [tokenCreation.from]
+    const accounts = [
+        ...new Set([
+            tokenCreation.from,
+            controllerCreation.from,
+            bridgeCreation.from,
+            ...otherCreations.map((creation) => creation.from),
+        ]),
+    ]
     try {
-        accounts.push((await hre.getNamedAccounts()).deployer)
+        const { deployer } = await hre.getNamedAccounts()
+        if (deployer && !accounts.some((account) => account.toLowerCase() === deployer.toLowerCase())) {
+            accounts.push(deployer)
+        }
     } catch {
-        console.log('No signer available; checking only the deployer from the creation transaction')
+        console.log('No signer available; checking only the deployers from the creation transactions')
     }
     for (const account of accounts) {
         if (!account) continue
@@ -917,17 +941,30 @@ export async function checkWtariDeployment(
             `wTARI: MINTER_ROLE was granted ${minterGrants.length} times; expected exactly once, to the controller`
         )
     }
-    // Every mint must be in a transaction where a mint Safe executed (ExecutionSuccess), also when relayed.
+    // Every mint must be in a transaction where a mint Safe executed (ExecutionSuccess), also when relayed;
+    // a single mint above HIGH_MINT_THRESHOLD (100,000 wTARI) requires the high-mint Safe.
     const mintTopics = [EVENTS.getEventTopic('Transfer'), ethers.utils.hexZeroPad('0x', 32)]
     const mintSafes = [config.mintLowSafe.toLowerCase(), config.mintHighSafe.toLowerCase()]
+    const highSafe = config.mintHighSafe.toLowerCase()
     const mintLogs = await fetchLogs(provider, [token.address], tokenCreation.blockNumber, mintTopics)
     const mintHashes = [...new Set(mintLogs.map((log) => log.transactionHash))]
-    for (const receipt of await fetchReceipts(provider, mintHashes)) {
-        const safeExecuted = receipt.logs.some(
-            (log) => mintSafes.includes(log.address.toLowerCase()) && log.topics[0] === SAFE_EXECUTION_SUCCESS
+    const receiptsByHash = new Map(
+        (await fetchReceipts(provider, mintHashes)).map((receipt) => [receipt.transactionHash, receipt])
+    )
+    for (const hash of mintHashes) {
+        const receipt = receiptsByHash.get(hash)
+        const txMints = mintLogs.filter((log) => log.transactionHash === hash).map((log) => EVENTS.parseLog(log))
+        const needsHighSafe = txMints.some((event) => event.args.value.gt(HIGH_MINT_THRESHOLD))
+        const allowedSafes = needsHighSafe ? [highSafe] : mintSafes
+        const safeExecuted = receipt?.logs.some(
+            (log) => allowedSafes.includes(log.address.toLowerCase()) && log.topics[0] === SAFE_EXECUTION_SUCCESS
         )
         if (!safeExecuted) {
-            failures.push(`wTARI: mint in transaction ${receipt.transactionHash} was not part of a mint Safe execution`)
+            failures.push(
+                needsHighSafe
+                    ? `wTARI: high mint in transaction ${hash} was not part of a mintHighSafe execution`
+                    : `wTARI: mint in transaction ${hash} was not part of a mint Safe execution`
+            )
         }
     }
     for (const event of tokenEvents) {
@@ -1211,6 +1248,9 @@ export async function exportedChainEntry(
     if (configuredStartBlock === undefined) {
         return keepLastGood('the chain config has no bridgeStartBlock; record it from check:wtari first')
     }
+    if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
+        return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
+    }
     if (unchanged) {
         if (previous.wTARIBridgeStartBlock !== configuredStartBlock) {
             return keepLastGood(
@@ -1219,9 +1259,6 @@ export async function exportedChainEntry(
         }
         for (const [key, value] of previousWtari) entry[key] = value
         return { entry, wtariFailed: false }
-    }
-    if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
-        return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
     try {
         // check:wtari also fails if the config's bridgeStartBlock differs from the proven creation block.
