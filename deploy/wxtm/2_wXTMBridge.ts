@@ -8,7 +8,7 @@ import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployment
 const contractName = 'wXTMBridge'
 
 const deploy: DeployFunction = async (hre) => {
-    const { getNamedAccounts, deployments } = hre
+    const { getNamedAccounts, deployments, getChainId } = hre
 
     // if (hre.network.name !== 'sepolia-testnet') {
     //     console.log(`Deployment script can only run on the Sepolia network. Current network: ${hre.network.name}`)
@@ -17,9 +17,11 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(1)
+    const chainId = Number(await getChainId())
+    const deployedContracts = getDeployments(chainId)
 
     assert(deployer, 'Missing named deployer account')
+    assert(deployedContracts.wXTM, `Missing wXTM deployment for chain ${chainId}`)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)

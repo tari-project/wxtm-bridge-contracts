@@ -8,13 +8,15 @@ import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployment
 const contractName = 'wXTMController'
 
 const deploy: DeployFunction = async (hre) => {
-    const { getNamedAccounts, deployments } = hre
+    const { getNamedAccounts, deployments, getChainId } = hre
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(1)
+    const chainId = Number(await getChainId())
+    const deployedContracts = getDeployments(chainId)
 
     assert(deployer, 'Missing named deployer account')
+    assert(deployedContracts.wXTM, `Missing wXTM deployment for chain ${chainId}`)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
