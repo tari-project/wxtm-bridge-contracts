@@ -107,6 +107,21 @@ contract wXTMBridgeTest is TestHelperOz5 {
         vm.stopPrank();
     }
 
+    function test_bridge_rejects_empty_or_oversized_target() public {
+        bytes memory tooLong = new bytes(129);
+        for (uint256 i = 0; i < tooLong.length; i++) tooLong[i] = "a";
+
+        vm.startPrank(user);
+        wxtm.approve(address(bridge), 3000 ether);
+        vm.expectRevert(wXTMBridge.InvalidTargetTariAddress.selector);
+        bridge.bridgeToTari("", 1000 ether);
+        vm.expectRevert(wXTMBridge.InvalidTargetTariAddress.selector);
+        bridge.bridgeToTari(string(tooLong), 1000 ether);
+        vm.expectRevert(wXTMBridge.InvalidTargetTariAddress.selector);
+        bridge.bridgeToTariWithAuthorization("", 1000 ether, 0, block.timestamp + 1, bytes32(0), 0, 0, 0);
+        vm.stopPrank();
+    }
+
     function test_bridge_to_tari() public {
         uint256 value = 3000 ether;
 
