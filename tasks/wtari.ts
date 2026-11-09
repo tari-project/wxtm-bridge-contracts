@@ -591,15 +591,59 @@ function compareRoleHolders(name: string, events: ethers.utils.LogDescription[],
     return failures
 }
 
-/** The creation transaction of a deployment record, read from the chain (not from the record). */
-async function creationTransaction(
+/** Confirmations required for a creation transaction when the RPC does not support the `finalized` tag. */
+export const MIN_CREATION_CONFIRMATIONS = 64
+
+/**
+ * Highest finalized block number, from the `finalized` tag; if the RPC does not support it, the latest block
+ * minus MIN_CREATION_CONFIRMATIONS - 1 (so a block at or below it has at least that many confirmations).
+ */
+async function finalizedBlockNumber(provider: providers.Provider): Promise<number> {
+    let finalized: providers.Block | null = null
+    try {
+        finalized = await provider.getBlock('finalized')
+    } catch {
+        finalized = null
+    }
+    if (finalized && finalized.number != null) return finalized.number
+    const latest = await provider.getBlockNumber()
+    return latest - (MIN_CREATION_CONFIRMATIONS - 1)
+}
+
+/** Waits (polling) until `blockNumber` is finalized, e.g. after deploy:wtari, before check:wtari runs. */
+export async function waitForFinalized(
+    provider: providers.Provider,
+    blockNumber: number,
+    { pollMs = 15_000, timeoutMs = 60 * 60_000 } = {}
+) {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+        const finalized = await finalizedBlockNumber(provider)
+        if (finalized >= blockNumber) return
+        if (Date.now() >= deadline) {
+            throw new Error(
+                `block ${blockNumber} not finalized after ${timeoutMs / 60_000} min (finalized ${finalized})`
+            )
+        }
+        console.log(`Waiting for block ${blockNumber} to be finalized (finalized: ${finalized})...`)
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
+}
+
+/**
+ * The creation transaction of a deployment record, read from the chain (not from the record). The
+ * transaction and receipt must name the same block (number and hash), that block must be the canonical block
+ * at that height, and it must be finalized; otherwise a reorg between the reads could move the returned
+ * start block.
+ */
+export async function creationTransaction(
     provider: providers.Provider,
     name: string,
     transactionHash: string | undefined,
     expected: ExpectedCreation
 ) {
     const tx = transactionHash ? await provider.getTransaction(transactionHash) : null
-    if (!tx || tx.blockNumber == null) {
+    if (!tx || tx.blockNumber == null || tx.blockHash == null) {
         throw new Error(`${name}: creation transaction ${transactionHash} not found on chain`)
     }
     // A forged record hash must not move the deployer or the replay start block.
@@ -609,11 +653,37 @@ async function creationTransaction(
             `${name}: transaction ${transactionHash} did not create ${expected.address} through the CREATE2 factory`
         )
     }
+    const receipt = await provider.getTransactionReceipt(tx.hash)
     // A reverted duplicate call with the same data would otherwise match.
-    if ((await provider.getTransactionReceipt(tx.hash))?.status !== 1) {
+    if (receipt?.status !== 1) {
         throw new Error(`${name}: creation transaction ${transactionHash} did not succeed`)
     }
-    return { from: tx.from, blockNumber: tx.blockNumber }
+    if (
+        receipt.transactionHash?.toLowerCase() !== tx.hash.toLowerCase() ||
+        receipt.blockNumber !== tx.blockNumber ||
+        receipt.blockHash?.toLowerCase() !== tx.blockHash.toLowerCase()
+    ) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} is in block ${tx.blockNumber} (${tx.blockHash}) but its ` +
+                `receipt is in block ${receipt.blockNumber} (${receipt.blockHash}); the chain reorganized, re-run later`
+        )
+    }
+    // Finality first: once the height is finalized, the canonical block there can no longer change.
+    const finalized = await finalizedBlockNumber(provider)
+    if (receipt.blockNumber > finalized) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} in block ${receipt.blockNumber} is not finalized ` +
+                `(finalized block ${finalized}); re-run once it is`
+        )
+    }
+    const block = await provider.getBlock(receipt.blockNumber)
+    if (!block || block.hash?.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} block ${receipt.blockNumber} (${receipt.blockHash}) is ` +
+                `not the canonical block ${block?.hash} at that height`
+        )
+    }
+    return { from: tx.from, blockNumber: receipt.blockNumber }
 }
 
 /** Zeroes the immutable ranges of a runtime bytecode so it can be compared with the compiled one. */
@@ -689,7 +759,7 @@ const CHECKED_IMMUTABLES: { [contractName: string]: string[] } = {
 const CREATE2_FACTORY_RUNTIME =
     '0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3'
 
-interface ExpectedCreation {
+export interface ExpectedCreation {
     address: string
     salt: string
     initCode: string
@@ -1413,6 +1483,8 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
 
             const lzEndpoint = officialLzEndpoint(config.network.eid, chain)
             const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
+            // check:wtari only accepts finalized creation transactions.
+            await waitForFinalized(hre.ethers.provider, await hre.ethers.provider.getBlockNumber())
             // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
             const { pendingSafeTransaction } = await checkWtariDeployment(hre, config, referenceProvider, {
                 preGrant: pending !== undefined,

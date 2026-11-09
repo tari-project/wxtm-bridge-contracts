@@ -11,10 +11,12 @@ import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 
 import { networkForChain } from '../../scripts/wtari'
 import {
+    MIN_CREATION_CONFIRMATIONS,
     REFERENCE_SAFES,
     WTARI_RECORD_NAMES,
     WtariChainConfig,
     checkWtariDeployment,
+    creationTransaction,
     deployWtari,
     etherscanVerify,
     expectedWtariCreations,
@@ -1066,6 +1068,126 @@ describe('Safe transaction hash', function () {
         expect(hashes.domainHash).to.equal(domainSeparator)
         expect(hashes.messageHash).to.equal(structHash)
         expect(hashes.safeTxHash).to.equal(byHand)
+    })
+})
+
+describe('creation proof under reorgs', function () {
+    const FACTORY = '0x4e59b44847b379578588920ca78fbf26c0b4956c'
+    const expected = {
+        address: '0x00000000000000000000000000000000000000aa',
+        salt: ethers.utils.id('salt'),
+        initCode: '0x6000',
+    }
+    const hash = ethers.utils.id('creation tx')
+    const blockA = ethers.utils.id('block 100 (old fork)')
+    const blockB = ethers.utils.id('block 98 (replacement fork)')
+    const blockC = ethers.utils.id('block 100 (replacement fork)')
+    type Chain = {
+        tx: { blockNumber: number; blockHash: string }
+        receipt: { blockNumber: number; blockHash: string; status: number }
+        canonical: { [n: number]: string }
+        finalized?: number // undefined: the RPC rejects the `finalized` tag
+        latest: number
+    }
+    // Each read reflects the chain at the time of that read, like an RPC during a reorg.
+    const mockProvider = (chain: Chain) =>
+        ({
+            getTransaction: async () => ({
+                hash,
+                from: '0x00000000000000000000000000000000000000d1',
+                to: FACTORY,
+                data: ethers.utils.hexConcat([expected.salt, expected.initCode]),
+                ...chain.tx,
+            }),
+            getTransactionReceipt: async () => ({ transactionHash: hash, ...chain.receipt }),
+            getBlock: async (tag: number | string) => {
+                if (tag === 'finalized') {
+                    if (chain.finalized === undefined) throw new Error('unknown block tag finalized')
+                    return { number: chain.finalized, hash: chain.canonical[chain.finalized] }
+                }
+                return { number: tag, hash: chain.canonical[tag as number] }
+            },
+            getBlockNumber: async () => chain.latest,
+        }) as unknown as Parameters<typeof creationTransaction>[0]
+    const prove = (chain: Chain) => creationTransaction(mockProvider(chain), 'wTARIBridge', hash, expected)
+
+    it('rejects a transaction and receipt from different blocks (the stale start block case)', async function () {
+        // The transaction read saw block 100 on the old fork; the receipt read saw the replacement block 98.
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 98, blockHash: blockB, status: 1 },
+                canonical: { 98: blockB, 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'is in block 100'
+        )
+        // Same height, different hash.
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockC, status: 1 },
+                canonical: { 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'the chain reorganized'
+        )
+    })
+
+    it('rejects a block that is not canonical or not finalized', async function () {
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'is not the canonical block'
+        )
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 99: ethers.utils.id('99'), 100: blockA },
+                finalized: 99,
+                latest: 210,
+            }),
+            'is not finalized (finalized block 99)'
+        )
+        // Without the `finalized` tag, MIN_CREATION_CONFIRMATIONS confirmations are required.
+        const noTag = (latest: number) =>
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 100: blockA },
+                latest,
+            })
+        await expectRejection(noTag(100 + MIN_CREATION_CONFIRMATIONS - 2), 'is not finalized')
+        expect((await noTag(100 + MIN_CREATION_CONFIRMATIONS - 1)).blockNumber).to.equal(100)
+    })
+
+    it('accepts a finalized canonical block that matches transaction and receipt', async function () {
+        const proven = await prove({
+            tx: { blockNumber: 98, blockHash: blockB },
+            receipt: { blockNumber: 98, blockHash: blockB, status: 1 },
+            canonical: { 98: blockB, 200: ethers.utils.id('200') },
+            finalized: 200,
+            latest: 210,
+        })
+        expect(proven.blockNumber).to.equal(98)
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 98, blockHash: blockB },
+                receipt: { blockNumber: 98, blockHash: blockB, status: 0 },
+                canonical: { 98: blockB, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'did not succeed'
+        )
     })
 })
 
