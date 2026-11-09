@@ -5,7 +5,6 @@ import {
     getCompatibilityFallbackHandlerDeployments,
     getSafeL2SingletonDeployments,
     getSafeSingletonDeployments,
-    getTokenCallbackHandlerDeployments,
 } from '@safe-global/safe-deployments'
 import { Contract, ethers, providers } from 'ethers'
 import { task, types } from 'hardhat/config'
@@ -128,22 +127,20 @@ export function safeSingletons(chainId: number): string[] {
 }
 
 /**
- * Official CompatibilityFallbackHandler and TokenCallbackHandler deployments for `chainId`, from
- * @safe-global/safe-deployments (lowercase). ExtensibleFallbackHandler is excluded because it can
- * delegate calls and EIP-1271 verification to custom handler contracts.
+ * Official CompatibilityFallbackHandler deployments for `chainId`, from @safe-global/safe-deployments (lowercase).
+ * Safe's FallbackManager CALLs the handler for unknown selectors with the Safe as msg.sender, so only the
+ * official CompatibilityFallbackHandler (whose functions only read the Safe, or simulate and revert) is allowed.
+ * ExtensibleFallbackHandler is excluded because it can delegate calls and EIP-1271 verification to custom
+ * handler contracts; TokenCallbackHandler is excluded because standard Safe setups never use it.
  */
 export function safeFallbackHandlers(chainId: number): string[] {
     const network = chainId === 31337 ? '1' : String(chainId)
     const handlers: string[] = []
     for (const version of SAFE_VERSIONS) {
-        for (const deployment of [
-            getCompatibilityFallbackHandlerDeployments({ version }),
-            getTokenCallbackHandlerDeployments({ version }),
-        ]) {
-            const addresses = deployment?.networkAddresses[network] ?? []
-            for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
-                handlers.push(address.toLowerCase())
-            }
+        const deployment = getCompatibilityFallbackHandlerDeployments({ version })
+        const addresses = deployment?.networkAddresses[network] ?? []
+        for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
+            handlers.push(address.toLowerCase())
         }
     }
     return handlers
@@ -238,7 +235,12 @@ async function checkSafe(
     if (!safeSingletons(chainId).includes(singleton.toLowerCase())) {
         throw new Error(`${label} ${safe} singleton ${singleton} is not an official Safe singleton on chain ${chainId}`)
     }
-    const fallbackHandler = ethers.utils.hexDataSlice(await provider.getStorageAt(safe, SAFE_FALLBACK_HANDLER_SLOT), 12)
+    // Zero is allowed deliberately: FallbackManager then returns without calling anything.
+    const fallbackSlot = await provider.getStorageAt(safe, SAFE_FALLBACK_HANDLER_SLOT)
+    if (!ethers.BigNumber.from(ethers.utils.hexDataSlice(fallbackSlot, 0, 12)).isZero()) {
+        throw new Error(`${label} ${safe} fallback handler slot ${fallbackSlot} is not a clean address`)
+    }
+    const fallbackHandler = ethers.utils.hexDataSlice(fallbackSlot, 12)
     if (
         fallbackHandler !== ethers.constants.AddressZero &&
         !safeFallbackHandlers(chainId).includes(fallbackHandler.toLowerCase())

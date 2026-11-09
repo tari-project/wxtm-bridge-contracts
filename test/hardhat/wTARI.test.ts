@@ -189,9 +189,19 @@ describe('wTARI config files', function () {
             expect(handlers).to.include('0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4')
             expect(handlers).to.include('0xfd0732dc9e303f09fcef3a7388ad10a83459ec99')
             expect(handlers).to.include('0x017062a1de2fe6b99be3d9d37841fed19f573804')
-            // ExtensibleFallbackHandler (v1.5.0) must not be allowed.
-            expect(handlers).to.not.include('0x2f55e8b20d0b9fefa187aa7d00b6cbe563605bf5')
+            // ExtensibleFallbackHandler and TokenCallbackHandler (v1.5.0) must not be allowed.
+            expect(handlers).to.not.include('0x85a8ca358d388530ad0fb95d0cb89dd44fc242c3')
+            expect(handlers).to.not.include('0x54e86d004d71a8d2112ec75face57d730b0433f3')
         }
+        // Only CompatibilityFallbackHandler: v1.3.0 canonical + eip155, v1.4.1, v1.5.0 on Base mainnet.
+        expect(safeFallbackHandlers(8453).sort()).to.deep.equal(
+            [
+                '0x017062a1de2fe6b99be3d9d37841fed19f573804',
+                '0x3efcbb83a4a7afcb4f68d501e2c2203a38be77f4',
+                '0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4',
+                '0xfd0732dc9e303f09fcef3a7388ad10a83459ec99',
+            ].sort()
+        )
         expect(safeSingletons(8453)).to.include('0xedd160febbd92e350d4d398fb636302fccd67c7e')
         expect(safeSingletons(999999)).to.deep.equal([])
         expect(safeFallbackHandlers(999999)).to.deep.equal([])
@@ -468,6 +478,27 @@ describe('deploy:wtari dry run', function () {
             { mintHighSafe: withCustomFallback.address },
             'is not an official Safe fallback handler on chain 31337'
         )
+
+        // ExtensibleFallbackHandler is official but can route calls to custom handlers.
+        const withExtensibleFallback = await makeSafe(owners, 2)
+        await setStorage(
+            withExtensibleFallback.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            '0x85a8ca358D388530ad0fB95D0cb89Dd44Fc242c3'
+        )
+        await reject(
+            { proxyAdminOwner: withExtensibleFallback.address },
+            'is not an official Safe fallback handler on chain 31337'
+        )
+
+        // Non-address bits in the slot fail closed.
+        const withDirtyFallback = await makeSafe(owners, 2)
+        await setStorage(
+            withDirtyFallback.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            ethers.utils.hexZeroPad('0x01' + 'fd0732dc9e303f09fcef3a7388ad10a83459ec99', 32)
+        )
+        await reject({ mintLowSafe: withDirtyFallback.address }, 'fallback handler slot')
 
         const fakeSingleton = await makeSafe(owners, 2, user.address)
         await reject({ mintHighSafe: fakeSingleton.address }, 'is not an official Safe singleton on chain 31337')
