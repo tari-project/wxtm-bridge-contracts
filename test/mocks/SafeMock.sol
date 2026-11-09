@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-/// @dev Minimal stand-in for a Gnosis Safe proxy: singleton in slot 0, owners/threshold/modules getters
-/// and an owner-only call forwarder.
+/// @dev Minimal stand-in for a Gnosis Safe proxy: singleton in slot 0, owners/threshold/modules getters,
+/// an owner-only call forwarder, and Safe's FallbackManager forwarding when the fallback handler slot is set.
 contract SafeMock {
     // Same signature as a real Safe (v1.3+), which emits it for every successful Safe transaction.
     event ExecutionSuccess(bytes32 txHash, uint256 payment);
+
+    // keccak256("fallback_manager.handler.address")
+    bytes32 private constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 
     address private singleton;
     address[] private owners;
@@ -50,5 +54,23 @@ contract SafeMock {
         }
         emit ExecutionSuccess(keccak256(data), 0);
         return result;
+    }
+
+    fallback() external {
+        bytes32 slot = FALLBACK_HANDLER_STORAGE_SLOT;
+        assembly {
+            let handler := sload(slot)
+            if iszero(handler) {
+                return(0, 0)
+            }
+            calldatacopy(0, 0, calldatasize())
+            mstore(calldatasize(), shl(96, caller()))
+            let success := call(gas(), handler, 0, 0, add(calldatasize(), 20), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            if iszero(success) {
+                revert(0, returndatasize())
+            }
+            return(0, returndatasize())
+        }
     }
 }

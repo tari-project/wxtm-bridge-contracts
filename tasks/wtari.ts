@@ -1,7 +1,12 @@
 import fs from 'fs'
 import path from 'path'
 
-import { getSafeL2SingletonDeployments, getSafeSingletonDeployments } from '@safe-global/safe-deployments'
+import {
+    getCompatibilityFallbackHandlerDeployments,
+    getSafeL2SingletonDeployments,
+    getSafeSingletonDeployments,
+    getTokenCallbackHandlerDeployments,
+} from '@safe-global/safe-deployments'
 import { Contract, ethers, providers } from 'ethers'
 import { task, types } from 'hardhat/config'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
@@ -69,6 +74,7 @@ const SAFE_PROXY_CODE_HASHES = [
     '0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f', // v1.5.0
 ]
 const SAFE_SENTINEL = '0x0000000000000000000000000000000000000001'
+const SAFE_FALLBACK_HANDLER_SLOT = ethers.utils.id('fallback_manager.handler.address')
 const SAFE_GUARD_SLOT = ethers.utils.id('guard_manager.guard.address')
 // v1.5.0 only; always zero on older versions.
 const SAFE_MODULE_GUARD_SLOT = ethers.utils.id('module_manager.module_guard.address')
@@ -118,6 +124,28 @@ export function safeSingletons(chainId: number): string[] {
         }
     }
     return singletons
+}
+
+/**
+ * Official CompatibilityFallbackHandler and TokenCallbackHandler deployments for `chainId`, from
+ * @safe-global/safe-deployments (lowercase). ExtensibleFallbackHandler is excluded because it can
+ * delegate calls and EIP-1271 verification to custom handler contracts.
+ */
+export function safeFallbackHandlers(chainId: number): string[] {
+    const network = chainId === 31337 ? '1' : String(chainId)
+    const handlers: string[] = []
+    for (const version of SAFE_VERSIONS) {
+        for (const deployment of [
+            getCompatibilityFallbackHandlerDeployments({ version }),
+            getTokenCallbackHandlerDeployments({ version }),
+        ]) {
+            const addresses = deployment?.networkAddresses[network] ?? []
+            for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
+                handlers.push(address.toLowerCase())
+            }
+        }
+    }
+    return handlers
 }
 
 const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
@@ -188,8 +216,8 @@ async function checkHasCode(provider: providers.Provider, label: string, address
 }
 
 /**
- * Official SafeProxy code, official singleton, no modules, no guards; owners/threshold equal to the
- * reference Safe if given. Returns the threshold.
+ * Official SafeProxy code, official singleton, official or zero fallback handler, no modules, no guards;
+ * owners/threshold equal to the reference Safe if given. Returns the threshold.
  */
 async function checkSafe(
     provider: providers.Provider,
@@ -208,6 +236,15 @@ async function checkSafe(
     const { chainId } = await provider.getNetwork()
     if (!safeSingletons(chainId).includes(singleton.toLowerCase())) {
         throw new Error(`${label} ${safe} singleton ${singleton} is not an official Safe singleton on chain ${chainId}`)
+    }
+    const fallbackHandler = ethers.utils.hexDataSlice(await provider.getStorageAt(safe, SAFE_FALLBACK_HANDLER_SLOT), 12)
+    if (
+        fallbackHandler !== ethers.constants.AddressZero &&
+        !safeFallbackHandlers(chainId).includes(fallbackHandler.toLowerCase())
+    ) {
+        throw new Error(
+            `${label} ${safe} fallback handler ${fallbackHandler} is not an official Safe fallback handler on chain ${chainId}`
+        )
     }
     const [modules] = await target.getModulesPaginated(SAFE_SENTINEL, 10)
     if (modules.length > 0) {
