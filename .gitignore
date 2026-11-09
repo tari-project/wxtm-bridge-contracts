@@ -31,3 +31,7 @@ pnpm-error.log
 wxtm-bridge-contracts-typechain/**/*.js
 wxtm-bridge-contracts-typechain/**/*.d.ts
 wxtm-bridge-contracts-typechain/typechain
+
+# export-deployments lock and temp files (utils/deployments-manifest.ts)
+wxtm-bridge-contracts-typechain/deployments/*.lock*
+wxtm-bridge-contracts-typechain/deployments/.*.tmp

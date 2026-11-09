@@ -11,6 +11,7 @@ import {
     referenceProviderFor,
     withRedactedRpcUrls,
 } from '../../tasks/wtari'
+import { readManifest, updateManifestEntry } from '../../utils/deployments-manifest'
 
 async function exportDeploymentsAddresses(path_directory: string) {
     //@ts-ignore
@@ -23,10 +24,9 @@ async function exportDeploymentsAddresses(path_directory: string) {
         fs.mkdirSync(path_directory)
     }
     const file = `${path_directory}/deployments.json`
-    const exported: { [chainId: string]: ExportedEntry } = fs.existsSync(file)
-        ? JSON.parse(fs.readFileSync(file, 'utf8'))
-        : {}
-    const previous: ExportedEntry = exported[chainId] ?? {}
+    // Snapshot of this chain's entry; the file is re-read under a lock before writing (see below).
+    const previousEntry = readManifest<ExportedEntry>(file)[chainId]
+    const previous: ExportedEntry = previousEntry ?? {}
 
     const addresses: { [name: string]: string } = {}
     for (const name of Object.keys(deployments)) addresses[name] = deployments[name].address
@@ -44,8 +44,8 @@ async function exportDeploymentsAddresses(path_directory: string) {
     })
     if (wtariFailed) console.warn(`WARNING: new wTARI entries for chain ${chainId} were not exported.`)
 
-    exported[chainId] = entry
-    fs.writeFileSync(file, JSON.stringify(exported, null, 2))
+    // Other chains may have been exported concurrently: merge under a lock and replace the file atomically.
+    await updateManifestEntry(file, String(chainId), previousEntry, entry)
     if (wtariFailed) process.exitCode = 1
 }
 
