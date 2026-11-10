@@ -90,6 +90,10 @@ contract wXTMControllerTest is TestHelperOz5 {
 
     function test_authorized_can_mint_only_proper_amount() public {
         vm.prank(lowMinter);
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        controller.mintLowAmount(user, 0);
+
+        vm.prank(lowMinter);
         vm.expectRevert(wXTMController.UnauthorizedToMintThisAmount.selector);
         controller.mintLowAmount(user, 100_001 ether);
 
@@ -97,9 +101,49 @@ contract wXTMControllerTest is TestHelperOz5 {
         controller.mintLowAmount(user, 5);
 
         vm.startPrank(highMinter);
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        controller.mintHighAmount(user, 0);
         controller.mintHighAmount(user, 5);
         controller.mintHighAmount(user, 200_000 ether);
         vm.stopPrank();
+    }
+
+    function test_initialize_rejects_zero_addresses() public {
+        wXTMController impl = new wXTMController();
+
+        vm.expectRevert(wXTMController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(impl),
+            admin,
+            abi.encodeWithSelector(wXTMController.initialize.selector, address(0), lowMinter, highMinter, admin)
+        );
+
+        vm.expectRevert(wXTMController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(impl),
+            admin,
+            abi.encodeWithSelector(wXTMController.initialize.selector, address(wxtm), address(0), highMinter, admin)
+        );
+
+        vm.expectRevert(wXTMController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(impl),
+            admin,
+            abi.encodeWithSelector(wXTMController.initialize.selector, address(wxtm), lowMinter, address(0), admin)
+        );
+
+        vm.expectRevert(wXTMController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(impl),
+            admin,
+            abi.encodeWithSelector(
+                wXTMController.initialize.selector,
+                address(wxtm),
+                lowMinter,
+                highMinter,
+                address(0)
+            )
+        );
     }
 
     function test_can_reassign_roles() public {
