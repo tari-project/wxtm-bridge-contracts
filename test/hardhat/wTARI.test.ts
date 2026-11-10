@@ -11,10 +11,12 @@ import { traverseMultipleDirectory } from 'hardhat-deploy/dist/src/utils'
 
 import { networkForChain } from '../../scripts/wtari'
 import {
+    MIN_CREATION_CONFIRMATIONS,
     REFERENCE_SAFES,
     WTARI_RECORD_NAMES,
     WtariChainConfig,
     checkWtariDeployment,
+    creationTransaction,
     deployWtari,
     etherscanVerify,
     expectedWtariCreations,
@@ -22,6 +24,7 @@ import {
     fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
+    safeFallbackHandlers,
     safeSingletons,
     safeTxHashes,
     uncheckedImmutables,
@@ -176,16 +179,34 @@ describe('wTARI config files', function () {
         expect(uncheckedImmutables('wTARIBridge', ['anything'])).to.deep.equal(['anything'])
     })
 
-    it('take the allowed Safe singletons for each chain from @safe-global/safe-deployments', function () {
+    it('take the allowed Safe singletons and fallback handlers for each chain from @safe-global/safe-deployments', function () {
         for (const chainId of [8453, 84532]) {
             const singletons = safeSingletons(chainId)
             // v1.3.0 canonical + eip155, v1.4.1, and v1.5.0 where listed.
             expect(singletons).to.include('0x69f4d1788e39c87893c980c06edf4b7f686e2938')
             expect(singletons).to.include('0xfb1bffc9d739b8d520daf37df666da4c687191ea')
             expect(singletons).to.include('0x29fcb43b46531bca003ddc8fcb67ffe91900c762')
+
+            const handlers = safeFallbackHandlers(chainId)
+            expect(handlers).to.include('0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4')
+            expect(handlers).to.include('0xfd0732dc9e303f09fcef3a7388ad10a83459ec99')
+            expect(handlers).to.include('0x017062a1de2fe6b99be3d9d37841fed19f573804')
+            // ExtensibleFallbackHandler and TokenCallbackHandler (v1.5.0) must not be allowed.
+            expect(handlers).to.not.include('0x85a8ca358d388530ad0fb95d0cb89dd44fc242c3')
+            expect(handlers).to.not.include('0x54e86d004d71a8d2112ec75face57d730b0433f3')
         }
+        // Only CompatibilityFallbackHandler: v1.3.0 canonical + eip155, v1.4.1, v1.5.0 on Base mainnet.
+        expect(safeFallbackHandlers(8453).sort()).to.deep.equal(
+            [
+                '0x017062a1de2fe6b99be3d9d37841fed19f573804',
+                '0x3efcbb83a4a7afcb4f68d501e2c2203a38be77f4',
+                '0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4',
+                '0xfd0732dc9e303f09fcef3a7388ad10a83459ec99',
+            ].sort()
+        )
         expect(safeSingletons(8453)).to.include('0xedd160febbd92e350d4d398fb636302fccd67c7e')
         expect(safeSingletons(999999)).to.deep.equal([])
+        expect(safeFallbackHandlers(999999)).to.deep.equal([])
     })
 
     it('reject configs that could leak secrets or drop production protections', function () {
@@ -383,6 +404,12 @@ describe('deploy:wtari dry run', function () {
             mintHighSafe: (await makeSafe(owners, 2)).address,
         }
         lowSafe = await makeSafe([user.address, safeOwner.address], 2)
+        // Standard Safes deployed via the official factory configure CompatibilityFallbackHandler.
+        await setStorage(
+            lowSafe.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            '0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99'
+        )
         highSafe = await makeSafe(owners, 2)
         adminSafe = await makeSafe(owners, 2)
 
@@ -446,6 +473,34 @@ describe('deploy:wtari dry run', function () {
         const withModuleGuard = await makeSafe(owners, 2)
         await setStorage(withModuleGuard.address, ethers.utils.id('module_manager.module_guard.address'), user.address)
         await reject({ mintHighSafe: withModuleGuard.address }, 'has a module guard set')
+
+        const withCustomFallback = await makeSafe(owners, 2)
+        await setStorage(withCustomFallback.address, ethers.utils.id('fallback_manager.handler.address'), user.address)
+        await reject(
+            { mintHighSafe: withCustomFallback.address },
+            'is not an official Safe fallback handler on chain 31337'
+        )
+
+        // ExtensibleFallbackHandler is official but can route calls to custom handlers.
+        const withExtensibleFallback = await makeSafe(owners, 2)
+        await setStorage(
+            withExtensibleFallback.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            '0x85a8ca358D388530ad0fB95D0cb89Dd44Fc242c3'
+        )
+        await reject(
+            { proxyAdminOwner: withExtensibleFallback.address },
+            'is not an official Safe fallback handler on chain 31337'
+        )
+
+        // Non-address bits in the slot fail closed.
+        const withDirtyFallback = await makeSafe(owners, 2)
+        await setStorage(
+            withDirtyFallback.address,
+            ethers.utils.id('fallback_manager.handler.address'),
+            ethers.utils.hexZeroPad('0x01' + 'fd0732dc9e303f09fcef3a7388ad10a83459ec99', 32)
+        )
+        await reject({ mintLowSafe: withDirtyFallback.address }, 'fallback handler slot')
 
         const fakeSingleton = await makeSafe(owners, 2, user.address)
         await reject({ mintHighSafe: fakeSingleton.address }, 'is not an official Safe singleton on chain 31337')
@@ -563,6 +618,17 @@ describe('deploy:wtari dry run', function () {
             await expectRejection(check(), `wTARI: transaction ${otherTx} did not create ${token.address}`)
         } finally {
             await deployments.save('wTARI_Proxy', tokenProxyRecord)
+        }
+
+        // Implementation and ProxyAdmin creation transactions are verified too, not just the 3 proxies.
+        for (const recordName of ['wTARIProxyAdmin', 'wTARI_Implementation'] as const) {
+            const record = await deployments.get(recordName)
+            await deployments.save(recordName, { ...record, transactionHash: otherTx })
+            try {
+                await expectRejection(check(), `${recordName}: transaction ${otherTx} did not create ${record.address}`)
+            } finally {
+                await deployments.save(recordName, record)
+            }
         }
 
         await check()
@@ -749,6 +815,16 @@ describe('deploy:wtari dry run', function () {
         )
         await setStorage(controller.address, 0, token.address)
 
+        // A Safe fallback handler pointing at wTARIController would let anyone call mintHighAmount as the Safe.
+        const fallbackSlot = ethers.utils.id('fallback_manager.handler.address')
+        await setStorage(highSafe.address, fallbackSlot, controller.address)
+        await controller.attach(highSafe.address).connect(user).callStatic.mintHighAmount(user.address, 1)
+        await expectRejection(
+            check(),
+            `mintHighSafe ${highSafe.address} fallback handler ${controller.address.toLowerCase()} is not an official Safe fallback handler on chain 31337`
+        )
+        await setStorage(highSafe.address, fallbackSlot, ethers.constants.AddressZero)
+
         // An implementation built for another endpoint is not at the expected CREATE2 address.
         await expectRejection(
             checkWtariDeployment(hre, config, ethers.provider, { expectedLzEndpoint: user.address }),
@@ -825,12 +901,25 @@ describe('deploy:wtari dry run', function () {
             `wTARI: MINTER_ROLE was granted to ${deployer.address}, which is not an expected holder`
         )
 
+        // A mint above HIGH_MINT_THRESHOLD (100,000 wTARI) executed by lowSafe (without highSafe) fails.
+        await asSafe('grantRole', [minterRole, lowSafe.address])
+        const overThreshold = ethers.utils.parseEther('100001')
+        const lowHighMint = await lowSafe.exec(
+            token.address,
+            token.interface.encodeFunctionData('mint', [user.address, overThreshold])
+        )
+        await asSafe('revokeRole', [minterRole, lowSafe.address])
+        await expectRejection(
+            check(),
+            `wTARI: high mint in transaction ${lowHighMint.hash} was not part of a mintHighSafe execution`
+        )
+
         // The controller's own grant must happen exactly once.
         await asSafe('revokeRole', [minterRole, controller.address])
         await asSafe('grantRole', [minterRole, controller.address])
         await expectRejection(
             check(),
-            'wTARI: MINTER_ROLE was granted 5 times; expected exactly once, to the controller'
+            'wTARI: MINTER_ROLE was granted 6 times; expected exactly once, to the controller'
         )
     })
 })
@@ -982,6 +1071,126 @@ describe('Safe transaction hash', function () {
     })
 })
 
+describe('creation proof under reorgs', function () {
+    const FACTORY = '0x4e59b44847b379578588920ca78fbf26c0b4956c'
+    const expected = {
+        address: '0x00000000000000000000000000000000000000aa',
+        salt: ethers.utils.id('salt'),
+        initCode: '0x6000',
+    }
+    const hash = ethers.utils.id('creation tx')
+    const blockA = ethers.utils.id('block 100 (old fork)')
+    const blockB = ethers.utils.id('block 98 (replacement fork)')
+    const blockC = ethers.utils.id('block 100 (replacement fork)')
+    type Chain = {
+        tx: { blockNumber: number; blockHash: string }
+        receipt: { blockNumber: number; blockHash: string; status: number }
+        canonical: { [n: number]: string }
+        finalized?: number // undefined: the RPC rejects the `finalized` tag
+        latest: number
+    }
+    // Each read reflects the chain at the time of that read, like an RPC during a reorg.
+    const mockProvider = (chain: Chain) =>
+        ({
+            getTransaction: async () => ({
+                hash,
+                from: '0x00000000000000000000000000000000000000d1',
+                to: FACTORY,
+                data: ethers.utils.hexConcat([expected.salt, expected.initCode]),
+                ...chain.tx,
+            }),
+            getTransactionReceipt: async () => ({ transactionHash: hash, ...chain.receipt }),
+            getBlock: async (tag: number | string) => {
+                if (tag === 'finalized') {
+                    if (chain.finalized === undefined) throw new Error('unknown block tag finalized')
+                    return { number: chain.finalized, hash: chain.canonical[chain.finalized] }
+                }
+                return { number: tag, hash: chain.canonical[tag as number] }
+            },
+            getBlockNumber: async () => chain.latest,
+        }) as unknown as Parameters<typeof creationTransaction>[0]
+    const prove = (chain: Chain) => creationTransaction(mockProvider(chain), 'wTARIBridge', hash, expected)
+
+    it('rejects a transaction and receipt from different blocks (the stale start block case)', async function () {
+        // The transaction read saw block 100 on the old fork; the receipt read saw the replacement block 98.
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 98, blockHash: blockB, status: 1 },
+                canonical: { 98: blockB, 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'is in block 100'
+        )
+        // Same height, different hash.
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockC, status: 1 },
+                canonical: { 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'the chain reorganized'
+        )
+    })
+
+    it('rejects a block that is not canonical or not finalized', async function () {
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 100: blockC, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'is not the canonical block'
+        )
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 99: ethers.utils.id('99'), 100: blockA },
+                finalized: 99,
+                latest: 210,
+            }),
+            'is not finalized (finalized block 99)'
+        )
+        // Without the `finalized` tag, MIN_CREATION_CONFIRMATIONS confirmations are required.
+        const noTag = (latest: number) =>
+            prove({
+                tx: { blockNumber: 100, blockHash: blockA },
+                receipt: { blockNumber: 100, blockHash: blockA, status: 1 },
+                canonical: { 100: blockA },
+                latest,
+            })
+        await expectRejection(noTag(100 + MIN_CREATION_CONFIRMATIONS - 2), 'is not finalized')
+        expect((await noTag(100 + MIN_CREATION_CONFIRMATIONS - 1)).blockNumber).to.equal(100)
+    })
+
+    it('accepts a finalized canonical block that matches transaction and receipt', async function () {
+        const proven = await prove({
+            tx: { blockNumber: 98, blockHash: blockB },
+            receipt: { blockNumber: 98, blockHash: blockB, status: 1 },
+            canonical: { 98: blockB, 200: ethers.utils.id('200') },
+            finalized: 200,
+            latest: 210,
+        })
+        expect(proven.blockNumber).to.equal(98)
+        await expectRejection(
+            prove({
+                tx: { blockNumber: 98, blockHash: blockB },
+                receipt: { blockNumber: 98, blockHash: blockB, status: 0 },
+                canonical: { 98: blockB, 200: ethers.utils.id('200') },
+                finalized: 200,
+                latest: 210,
+            }),
+            'did not succeed'
+        )
+    })
+})
+
 describe('export-deployments wTARI gate', function () {
     const wxtm = { wXTM: '0x01', DefaultProxyAdmin: '0x02' }
     const wtari: { [name: string]: string } = {}
@@ -1025,6 +1234,11 @@ describe('export-deployments wTARI gate', function () {
         const { entry, wtariFailed } = await exportedChainEntry(previous, { ...wxtm, ...wtari }, 7, failing)
         expect(entry).to.deep.equal(previous)
         expect(wtariFailed).to.equal(false)
+
+        // An unchanged partial set is still rejected rather than bypassed as unchanged.
+        const partialPrevious = { ...wxtm, wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
+        const partialRes = await exportedChainEntry(partialPrevious, { ...wxtm, wTARI: '0x0a' }, 7, passing)
+        expect(partialRes.wtariFailed).to.equal(true)
     })
 
     it('requires the config bridgeStartBlock, equal to the proven block, before exporting wTARI keys', async function () {

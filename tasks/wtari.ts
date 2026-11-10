@@ -1,7 +1,11 @@
 import fs from 'fs'
 import path from 'path'
 
-import { getSafeL2SingletonDeployments, getSafeSingletonDeployments } from '@safe-global/safe-deployments'
+import {
+    getCompatibilityFallbackHandlerDeployments,
+    getSafeL2SingletonDeployments,
+    getSafeSingletonDeployments,
+} from '@safe-global/safe-deployments'
 import { Contract, ethers, providers } from 'ethers'
 import { task, types } from 'hardhat/config'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
@@ -69,6 +73,7 @@ const SAFE_PROXY_CODE_HASHES = [
     '0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f', // v1.5.0
 ]
 const SAFE_SENTINEL = '0x0000000000000000000000000000000000000001'
+const SAFE_FALLBACK_HANDLER_SLOT = ethers.utils.id('fallback_manager.handler.address')
 const SAFE_GUARD_SLOT = ethers.utils.id('guard_manager.guard.address')
 // v1.5.0 only; always zero on older versions.
 const SAFE_MODULE_GUARD_SLOT = ethers.utils.id('module_manager.module_guard.address')
@@ -78,6 +83,7 @@ const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
 const MINTER_ROLE = ethers.utils.id('MINTER_ROLE')
 const LOW_MINTER_ROLE = ethers.utils.id('LOW_MINTER_ROLE')
 const HIGH_MINTER_ROLE = ethers.utils.id('HIGH_MINTER_ROLE')
+const HIGH_MINT_THRESHOLD = ethers.utils.parseEther('100000')
 const ROLE_NAMES: { [role: string]: string } = {
     [DEFAULT_ADMIN_ROLE]: 'DEFAULT_ADMIN_ROLE',
     [MINTER_ROLE]: 'MINTER_ROLE',
@@ -118,6 +124,26 @@ export function safeSingletons(chainId: number): string[] {
         }
     }
     return singletons
+}
+
+/**
+ * Official CompatibilityFallbackHandler deployments for `chainId`, from @safe-global/safe-deployments (lowercase).
+ * Safe's FallbackManager CALLs the handler for unknown selectors with the Safe as msg.sender, so only the
+ * official CompatibilityFallbackHandler (whose functions only read the Safe, or simulate and revert) is allowed.
+ * ExtensibleFallbackHandler is excluded because it can delegate calls and EIP-1271 verification to custom
+ * handler contracts; TokenCallbackHandler is excluded because standard Safe setups never use it.
+ */
+export function safeFallbackHandlers(chainId: number): string[] {
+    const network = chainId === 31337 ? '1' : String(chainId)
+    const handlers: string[] = []
+    for (const version of SAFE_VERSIONS) {
+        const deployment = getCompatibilityFallbackHandlerDeployments({ version })
+        const addresses = deployment?.networkAddresses[network] ?? []
+        for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
+            handlers.push(address.toLowerCase())
+        }
+    }
+    return handlers
 }
 
 const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
@@ -188,8 +214,8 @@ async function checkHasCode(provider: providers.Provider, label: string, address
 }
 
 /**
- * Official SafeProxy code, official singleton, no modules, no guards; owners/threshold equal to the
- * reference Safe if given. Returns the threshold.
+ * Official SafeProxy code, official singleton, official or zero fallback handler, no modules, no guards;
+ * owners/threshold equal to the reference Safe if given. Returns the threshold.
  */
 async function checkSafe(
     provider: providers.Provider,
@@ -208,6 +234,20 @@ async function checkSafe(
     const { chainId } = await provider.getNetwork()
     if (!safeSingletons(chainId).includes(singleton.toLowerCase())) {
         throw new Error(`${label} ${safe} singleton ${singleton} is not an official Safe singleton on chain ${chainId}`)
+    }
+    // Zero is allowed deliberately: FallbackManager then returns without calling anything.
+    const fallbackSlot = await provider.getStorageAt(safe, SAFE_FALLBACK_HANDLER_SLOT)
+    if (!ethers.BigNumber.from(ethers.utils.hexDataSlice(fallbackSlot, 0, 12)).isZero()) {
+        throw new Error(`${label} ${safe} fallback handler slot ${fallbackSlot} is not a clean address`)
+    }
+    const fallbackHandler = ethers.utils.hexDataSlice(fallbackSlot, 12)
+    if (
+        fallbackHandler !== ethers.constants.AddressZero &&
+        !safeFallbackHandlers(chainId).includes(fallbackHandler.toLowerCase())
+    ) {
+        throw new Error(
+            `${label} ${safe} fallback handler ${fallbackHandler} is not an official Safe fallback handler on chain ${chainId}`
+        )
     }
     const [modules] = await target.getModulesPaginated(SAFE_SENTINEL, 10)
     if (modules.length > 0) {
@@ -551,15 +591,59 @@ function compareRoleHolders(name: string, events: ethers.utils.LogDescription[],
     return failures
 }
 
-/** The creation transaction of a deployment record, read from the chain (not from the record). */
-async function creationTransaction(
+/** Confirmations required for a creation transaction when the RPC does not support the `finalized` tag. */
+export const MIN_CREATION_CONFIRMATIONS = 64
+
+/**
+ * Highest finalized block number, from the `finalized` tag; if the RPC does not support it, the latest block
+ * minus MIN_CREATION_CONFIRMATIONS - 1 (so a block at or below it has at least that many confirmations).
+ */
+async function finalizedBlockNumber(provider: providers.Provider): Promise<number> {
+    let finalized: providers.Block | null = null
+    try {
+        finalized = await provider.getBlock('finalized')
+    } catch {
+        finalized = null
+    }
+    if (finalized && finalized.number != null) return finalized.number
+    const latest = await provider.getBlockNumber()
+    return latest - (MIN_CREATION_CONFIRMATIONS - 1)
+}
+
+/** Waits (polling) until `blockNumber` is finalized, e.g. after deploy:wtari, before check:wtari runs. */
+export async function waitForFinalized(
+    provider: providers.Provider,
+    blockNumber: number,
+    { pollMs = 15_000, timeoutMs = 60 * 60_000 } = {}
+) {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+        const finalized = await finalizedBlockNumber(provider)
+        if (finalized >= blockNumber) return
+        if (Date.now() >= deadline) {
+            throw new Error(
+                `block ${blockNumber} not finalized after ${timeoutMs / 60_000} min (finalized ${finalized})`
+            )
+        }
+        console.log(`Waiting for block ${blockNumber} to be finalized (finalized: ${finalized})...`)
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
+}
+
+/**
+ * The creation transaction of a deployment record, read from the chain (not from the record). The
+ * transaction and receipt must name the same block (number and hash), that block must be the canonical block
+ * at that height, and it must be finalized; otherwise a reorg between the reads could move the returned
+ * start block.
+ */
+export async function creationTransaction(
     provider: providers.Provider,
     name: string,
     transactionHash: string | undefined,
     expected: ExpectedCreation
 ) {
     const tx = transactionHash ? await provider.getTransaction(transactionHash) : null
-    if (!tx || tx.blockNumber == null) {
+    if (!tx || tx.blockNumber == null || tx.blockHash == null) {
         throw new Error(`${name}: creation transaction ${transactionHash} not found on chain`)
     }
     // A forged record hash must not move the deployer or the replay start block.
@@ -569,11 +653,37 @@ async function creationTransaction(
             `${name}: transaction ${transactionHash} did not create ${expected.address} through the CREATE2 factory`
         )
     }
+    const receipt = await provider.getTransactionReceipt(tx.hash)
     // A reverted duplicate call with the same data would otherwise match.
-    if ((await provider.getTransactionReceipt(tx.hash))?.status !== 1) {
+    if (receipt?.status !== 1) {
         throw new Error(`${name}: creation transaction ${transactionHash} did not succeed`)
     }
-    return { from: tx.from, blockNumber: tx.blockNumber }
+    if (
+        receipt.transactionHash?.toLowerCase() !== tx.hash.toLowerCase() ||
+        receipt.blockNumber !== tx.blockNumber ||
+        receipt.blockHash?.toLowerCase() !== tx.blockHash.toLowerCase()
+    ) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} is in block ${tx.blockNumber} (${tx.blockHash}) but its ` +
+                `receipt is in block ${receipt.blockNumber} (${receipt.blockHash}); the chain reorganized, re-run later`
+        )
+    }
+    // Finality first: once the height is finalized, the canonical block there can no longer change.
+    const finalized = await finalizedBlockNumber(provider)
+    if (receipt.blockNumber > finalized) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} in block ${receipt.blockNumber} is not finalized ` +
+                `(finalized block ${finalized}); re-run once it is`
+        )
+    }
+    const block = await provider.getBlock(receipt.blockNumber)
+    if (!block || block.hash?.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+        throw new Error(
+            `${name}: creation transaction ${transactionHash} block ${receipt.blockNumber} (${receipt.blockHash}) is ` +
+                `not the canonical block ${block?.hash} at that height`
+        )
+    }
+    return { from: tx.from, blockNumber: receipt.blockNumber }
 }
 
 /** Zeroes the immutable ranges of a runtime bytecode so it can be compared with the compiled one. */
@@ -649,7 +759,7 @@ const CHECKED_IMMUTABLES: { [contractName: string]: string[] } = {
 const CREATE2_FACTORY_RUNTIME =
     '0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3'
 
-interface ExpectedCreation {
+export interface ExpectedCreation {
     address: string
     salt: string
     initCode: string
@@ -839,23 +949,46 @@ export async function checkWtariDeployment(
         }
     }
 
-    // The deployer and start blocks come from the proven, successful creation transactions.
+    // The deployer and start blocks come from the proven, successful creation transactions of all 7 records.
     const proxyCreation = async (name: 'wTARI' | 'wTARIController' | 'wTARIBridge') =>
         creationTransaction(provider, name, (await get(`${name}_Proxy`)).transactionHash, expected[name])
+    const recordCreation = async (
+        name:
+            | typeof PROXY_ADMIN_NAME
+            | 'wTARI_Implementation'
+            | 'wTARIController_Implementation'
+            | 'wTARIBridge_Implementation'
+    ) => creationTransaction(provider, name, (await get(name)).transactionHash, expected[name])
     const tokenCreation = await proxyCreation('wTARI')
     const controllerCreation = await proxyCreation('wTARIController')
     const bridgeCreation = await proxyCreation('wTARIBridge')
+    const otherCreations = await Promise.all([
+        recordCreation(PROXY_ADMIN_NAME),
+        recordCreation('wTARI_Implementation'),
+        recordCreation('wTARIController_Implementation'),
+        recordCreation('wTARIBridge_Implementation'),
+    ])
     console.log(`wTARIBridge proxy creation block (bridgeStartBlock): ${bridgeCreation.blockNumber}`)
     if (config.bridgeStartBlock !== undefined && config.bridgeStartBlock !== bridgeCreation.blockNumber) {
         failures.push(
             `config bridgeStartBlock ${config.bridgeStartBlock} is not the bridge proxy creation block ${bridgeCreation.blockNumber}`
         )
     }
-    const accounts = [tokenCreation.from]
+    const accounts = [
+        ...new Set([
+            tokenCreation.from,
+            controllerCreation.from,
+            bridgeCreation.from,
+            ...otherCreations.map((creation) => creation.from),
+        ]),
+    ]
     try {
-        accounts.push((await hre.getNamedAccounts()).deployer)
+        const { deployer } = await hre.getNamedAccounts()
+        if (deployer && !accounts.some((account) => account.toLowerCase() === deployer.toLowerCase())) {
+            accounts.push(deployer)
+        }
     } catch {
-        console.log('No signer available; checking only the deployer from the creation transaction')
+        console.log('No signer available; checking only the deployers from the creation transactions')
     }
     for (const account of accounts) {
         if (!account) continue
@@ -917,17 +1050,30 @@ export async function checkWtariDeployment(
             `wTARI: MINTER_ROLE was granted ${minterGrants.length} times; expected exactly once, to the controller`
         )
     }
-    // Every mint must be in a transaction where a mint Safe executed (ExecutionSuccess), also when relayed.
+    // Every mint must be in a transaction where a mint Safe executed (ExecutionSuccess), also when relayed;
+    // a single mint above HIGH_MINT_THRESHOLD (100,000 wTARI) requires the high-mint Safe.
     const mintTopics = [EVENTS.getEventTopic('Transfer'), ethers.utils.hexZeroPad('0x', 32)]
     const mintSafes = [config.mintLowSafe.toLowerCase(), config.mintHighSafe.toLowerCase()]
+    const highSafe = config.mintHighSafe.toLowerCase()
     const mintLogs = await fetchLogs(provider, [token.address], tokenCreation.blockNumber, mintTopics)
     const mintHashes = [...new Set(mintLogs.map((log) => log.transactionHash))]
-    for (const receipt of await fetchReceipts(provider, mintHashes)) {
-        const safeExecuted = receipt.logs.some(
-            (log) => mintSafes.includes(log.address.toLowerCase()) && log.topics[0] === SAFE_EXECUTION_SUCCESS
+    const receiptsByHash = new Map(
+        (await fetchReceipts(provider, mintHashes)).map((receipt) => [receipt.transactionHash, receipt])
+    )
+    for (const hash of mintHashes) {
+        const receipt = receiptsByHash.get(hash)
+        const txMints = mintLogs.filter((log) => log.transactionHash === hash).map((log) => EVENTS.parseLog(log))
+        const needsHighSafe = txMints.some((event) => event.args.value.gt(HIGH_MINT_THRESHOLD))
+        const allowedSafes = needsHighSafe ? [highSafe] : mintSafes
+        const safeExecuted = receipt?.logs.some(
+            (log) => allowedSafes.includes(log.address.toLowerCase()) && log.topics[0] === SAFE_EXECUTION_SUCCESS
         )
         if (!safeExecuted) {
-            failures.push(`wTARI: mint in transaction ${receipt.transactionHash} was not part of a mint Safe execution`)
+            failures.push(
+                needsHighSafe
+                    ? `wTARI: high mint in transaction ${hash} was not part of a mintHighSafe execution`
+                    : `wTARI: mint in transaction ${hash} was not part of a mint Safe execution`
+            )
         }
     }
     for (const event of tokenEvents) {
@@ -1211,6 +1357,9 @@ export async function exportedChainEntry(
     if (configuredStartBlock === undefined) {
         return keepLastGood('the chain config has no bridgeStartBlock; record it from check:wtari first')
     }
+    if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
+        return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
+    }
     if (unchanged) {
         if (previous.wTARIBridgeStartBlock !== configuredStartBlock) {
             return keepLastGood(
@@ -1219,9 +1368,6 @@ export async function exportedChainEntry(
         }
         for (const [key, value] of previousWtari) entry[key] = value
         return { entry, wtariFailed: false }
-    }
-    if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
-        return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
     try {
         // check:wtari also fails if the config's bridgeStartBlock differs from the proven creation block.
@@ -1337,6 +1483,8 @@ task('deploy:wtari', 'Deploy wTARI, wTARIController and wTARIBridge using deploy
 
             const lzEndpoint = officialLzEndpoint(config.network.eid, chain)
             const pending = await deployWtari(hre, config, lzEndpoint, referenceProvider)
+            // check:wtari only accepts finalized creation transactions.
+            await waitForFinalized(hre.ethers.provider, await hre.ethers.provider.getBlockNumber())
             // The full check runs before the Safe is asked to sign anything; only the grant may be missing.
             const { pendingSafeTransaction } = await checkWtariDeployment(hre, config, referenceProvider, {
                 preGrant: pending !== undefined,
