@@ -10,6 +10,7 @@ import { EIP3009 } from "../../contracts/extensions/EIP3009.sol";
 import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contracts/TestHelperOz5.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract wTARITest is TestHelperOz5 {
@@ -253,6 +254,117 @@ contract wTARITest is TestHelperOz5 {
         bridge.bridgeToTariWithAuthorization(OOTLE_ADDRESS, 3000 ether, 0, validBefore, authNonce, v, r, s);
 
         assertEq(token.balanceOf(user), 0);
+    }
+
+    function test_rejects_zero_mint_and_zero_address_init_and_malformed_eip3009_sig() public {
+        vm.startPrank(safeOwner);
+        vm.expectRevert(wTARI.ZeroAmount.selector);
+        lowSafe.exec(address(controller), abi.encodeCall(wTARIController.mintLowAmount, (user, 0)));
+
+        vm.expectRevert(wTARI.ZeroAmount.selector);
+        highSafe.exec(address(controller), abi.encodeCall(wTARIController.mintHighAmount, (user, 0)));
+        vm.stopPrank();
+
+        // Zero-address initializer guards on all 4 parameters of wTARIController and wTARIBridge
+        wTARIController controllerImpl = new wTARIController();
+        vm.expectRevert(wTARIController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(controllerImpl),
+            admin,
+            abi.encodeWithSelector(
+                wTARIController.initialize.selector,
+                address(0),
+                address(lowSafe),
+                address(highSafe),
+                admin,
+                LOW_MINT_DAILY_LIMIT
+            )
+        );
+        vm.expectRevert(wTARIController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(controllerImpl),
+            admin,
+            abi.encodeWithSelector(
+                wTARIController.initialize.selector,
+                address(token),
+                address(0),
+                address(highSafe),
+                admin,
+                LOW_MINT_DAILY_LIMIT
+            )
+        );
+        vm.expectRevert(wTARIController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(controllerImpl),
+            admin,
+            abi.encodeWithSelector(
+                wTARIController.initialize.selector,
+                address(token),
+                address(lowSafe),
+                address(0),
+                admin,
+                LOW_MINT_DAILY_LIMIT
+            )
+        );
+        vm.expectRevert(wTARIController.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(controllerImpl),
+            admin,
+            abi.encodeWithSelector(
+                wTARIController.initialize.selector,
+                address(token),
+                address(lowSafe),
+                address(highSafe),
+                address(0),
+                LOW_MINT_DAILY_LIMIT
+            )
+        );
+
+        wTARIBridge bridgeImpl = new wTARIBridge();
+        vm.expectRevert(wTARIBridge.ZeroAddress.selector);
+        new TransparentUpgradeableProxy(
+            address(bridgeImpl),
+            admin,
+            abi.encodeWithSelector(wTARIBridge.initialize.selector, address(0))
+        );
+
+        wTARI tokenImpl = new wTARI(address(endpoints[aEid]));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableInvalidOwner.selector, address(0)));
+        new TransparentUpgradeableProxy(
+            address(tokenImpl),
+            admin,
+            abi.encodeWithSelector(wTARI.initialize.selector, "Wrapped Tari", "wTARI", "1", address(0))
+        );
+
+        // Malformed EIP-3009 signatures (v=0 and malleable high-s) revert with EIP3009_InvalidSignature
+        vm.prank(user);
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        bridge.bridgeToTariWithAuthorization(
+            OOTLE_ADDRESS,
+            1000 ether,
+            0,
+            block.timestamp + 1 hours,
+            keccak256("bad-sig"),
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
+
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        token.transferWithAuthorization(
+            user,
+            admin,
+            100 ether,
+            0,
+            block.timestamp + 1 hours,
+            keccak256("bad-transfer-sig"),
+            27,
+            bytes32(uint256(1)),
+            bytes32(uint256(0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A1))
+        );
+
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        token.cancelAuthorization(user, keccak256("bad-cancel-sig"), 0, bytes32(0), bytes32(0));
     }
 
     function _signReceive(

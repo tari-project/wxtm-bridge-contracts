@@ -6,6 +6,7 @@ import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/ac
 import { IwTARI } from "./interfaces/IwTARI.sol";
 
 contract wTARIController is AccessControlUpgradeable {
+    error ZeroAddress();
     error UnauthorizedToMintThisAmount();
     error LowMintDailyLimitExceeded();
 
@@ -34,6 +35,9 @@ contract wTARIController is AccessControlUpgradeable {
         address admin,
         uint256 _lowMintDailyLimit
     ) external initializer {
+        if (_wtari == address(0) || lowMinter == address(0) || highMinter == address(0) || admin == address(0)) {
+            revert ZeroAddress();
+        }
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);

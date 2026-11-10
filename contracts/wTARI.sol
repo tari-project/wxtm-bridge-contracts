@@ -29,6 +29,8 @@ contract wTARI is OFTUpgradeable, EIP3009, AccessControlUpgradeable {
     }
 
     function mint(address _to, uint256 _amount) external onlyRole(MINTER_ROLE) {
+        if (_amount == 0) revert ZeroAmount();
+
         _mint(_to, _amount);
     }
 
