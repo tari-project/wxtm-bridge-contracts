@@ -51,8 +51,8 @@ export const REFERENCE_SAFES: { [chainId: number]: { mintLowSafe: string; mintHi
         mintHighSafe: '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
     },
     11155111: {
-        mintLowSafe: '0x4b731EF14788f7371fAC837860Ed7bF2030344d2',
-        mintHighSafe: '0x8aead919E7716a0840cB84495fA1AC76e04f7845',
+        mintLowSafe: '0x6776eBB11d9d698F1B2A1DF8e89Aa4C08EB30c54',
+        mintHighSafe: '0x64fa0cE14B9718fAF62648ab574970A3611D609f',
     },
 }
 

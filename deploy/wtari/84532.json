@@ -11,9 +11,9 @@
   },
   "production": false,
   "lowMintDailyLimit": "500000",
-  "mintLowSafe": "0x0000000000000000000000000000000000000000",
-  "mintHighSafe": "0x0000000000000000000000000000000000000000",
-  "proxyAdminOwner": "0x0000000000000000000000000000000000000000",
+  "mintLowSafe": "0x6776eBB11d9d698F1B2A1DF8e89Aa4C08EB30c54",
+  "mintHighSafe": "0x64fa0cE14B9718fAF62648ab574970A3611D609f",
+  "proxyAdminOwner": "0x7dC62F92f5D722BE995309Eb34A9BFF2eC25eE47",
   "confirmations": 5,
   "referenceChainId": 11155111,
   "referenceRpcUrlEnv": "SEPOLIA_RPC_URL"
