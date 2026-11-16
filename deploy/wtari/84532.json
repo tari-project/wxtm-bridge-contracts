@@ -16,5 +16,6 @@
   "proxyAdminOwner": "0x7dC62F92f5D722BE995309Eb34A9BFF2eC25eE47",
   "confirmations": 5,
   "referenceChainId": 11155111,
-  "referenceRpcUrlEnv": "SEPOLIA_RPC_URL"
+  "referenceRpcUrlEnv": "SEPOLIA_RPC_URL",
+  "bridgeStartBlock": 59577684
 }
