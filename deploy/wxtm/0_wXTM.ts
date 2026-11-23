@@ -1,10 +1,13 @@
+import assert from 'assert'
+
+import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import assert from 'assert'
-import verify from '../../utils/verify'
-import { ethers } from 'hardhat'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
+
+import { getAdmin } from '../../utils/admin'
+import verify from '../../utils/verify'
 
 const contractName = 'wXTM'
 
@@ -15,9 +18,11 @@ const deploy: DeployFunction = async (hre) => {
     const { deployer } = await getNamedAccounts()
 
     assert(deployer, 'Missing named deployer account')
+    const admin = await getAdmin(hre)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
+    console.log(`Admin: ${admin}`)
 
     // This is an external deployment pulled in from @layerzerolabs/lz-evm-sdk-v2
     //
@@ -53,15 +58,15 @@ const deploy: DeployFunction = async (hre) => {
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
-            owner: deployer,
+            owner: admin,
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: ['WrappedXTM', 'wXTM', '1', deployer],
+                    args: ['WrappedXTM', 'wXTM', '1', admin],
                 },
                 onUpgrade: {
                     methodName: 'initializeV1',
-                    args: ['WrappedXTM', 'wXTM', '2', deployer],
+                    args: ['WrappedXTM', 'wXTM', '2', admin],
                 },
             },
         },

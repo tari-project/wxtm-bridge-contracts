@@ -1,8 +1,10 @@
+import assert from 'assert'
+
+import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import assert from 'assert'
+import { getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
-import { ethers } from 'hardhat'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const contractName = 'wXTMController'
@@ -15,9 +17,11 @@ const deploy: DeployFunction = async (hre) => {
     const deployedContracts = getDeployments(1)
 
     assert(deployer, 'Missing named deployer account')
+    const admin = await getAdmin(hre)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
+    console.log(`Admin: ${admin}`)
 
     const salt = ethers.utils.id('wXTMController-v0.0.1')
 
@@ -30,7 +34,7 @@ const deploy: DeployFunction = async (hre) => {
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
-            owner: deployer,
+            owner: admin,
             execute: {
                 init: {
                     methodName: 'initialize',
@@ -38,7 +42,7 @@ const deploy: DeployFunction = async (hre) => {
                         deployedContracts.wXTM,
                         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
                         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                        deployer,
+                        admin,
                     ],
                 },
                 // onUpgrade: {
@@ -47,7 +51,7 @@ const deploy: DeployFunction = async (hre) => {
                 //         deployedContracts.wXTM,
                 //         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
                 //         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                //         deployer,
+                //         admin,
                 //     ],
                 // },
             },

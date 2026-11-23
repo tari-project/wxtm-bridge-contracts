@@ -120,6 +120,11 @@ const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
         deployer: {
             default: 0, // wallet address of index[0], of the mnemonic in .env
         },
+        // Holds every admin power over the wXTM contracts (see utils/admin.ts). No default: a network that is
+        // not listed here cannot be deployed to.
+        admin: {
+            mainnet: '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB', // alias/admin-key, prod backend account
+        },
     },
 }
 
