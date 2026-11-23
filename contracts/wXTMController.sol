@@ -6,6 +6,7 @@ import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/ac
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
 contract wXTMController is AccessControlUpgradeable {
+    error ZeroAddress();
     error UnauthorizedToMintThisAmount();
 
     uint256 private constant HIGH_MINT_THRESHOLD = 100_000 ether;
@@ -19,6 +20,9 @@ contract wXTMController is AccessControlUpgradeable {
     }
 
     function initialize(address _wxtm, address lowMinter, address highMinter, address admin) external initializer {
+        if (_wxtm == address(0) || lowMinter == address(0) || highMinter == address(0) || admin == address(0)) {
+            revert ZeroAddress();
+        }
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);

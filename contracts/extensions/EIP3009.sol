@@ -178,6 +178,7 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Upgradeable {
      * @param signature     Signature byte array produced by an EOA wallet or a contract wallet
      */
     function _requireValidSignature(address signer, bytes32 dataHash, bytes memory signature) private view {
-        if (signer != ECDSA.recover(_hashTypedDataV4(dataHash), signature)) revert EIP3009_InvalidSignature();
+        (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecover(_hashTypedDataV4(dataHash), signature);
+        if (err != ECDSA.RecoverError.NoError || recovered != signer) revert EIP3009_InvalidSignature();
     }
 }

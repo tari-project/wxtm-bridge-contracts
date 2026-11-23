@@ -10,6 +10,7 @@ import { IwTARI } from "./interfaces/IwTARI.sol";
 contract wTARIBridge is Initializable {
     using SafeERC20 for IERC20;
 
+    error ZeroAddress();
     error InsufficientAmount();
     error InvalidTargetTariAddress();
 
@@ -25,6 +26,7 @@ contract wTARIBridge is Initializable {
     }
 
     function initialize(address _wTARI) external initializer {
+        if (_wTARI == address(0)) revert ZeroAddress();
         wTARI = _wTARI;
     }
 

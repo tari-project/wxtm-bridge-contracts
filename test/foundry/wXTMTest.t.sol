@@ -4,6 +4,7 @@ pragma solidity ^0.8.22;
 // Contract imports
 import { wXTM } from "../../contracts/wXTM.sol";
 import { wXTMController } from "../../contracts/wXTMController.sol";
+import { EIP3009 } from "../../contracts/extensions/EIP3009.sol";
 
 // Mock imports
 import { ERC20Mock } from "../mocks/ERC20Mock.sol";
@@ -25,6 +26,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Met
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 // Forge imports
 import "forge-std/console.sol";
@@ -231,6 +233,50 @@ contract wXTMTest is TestHelperOz5 {
         aOFT.burn(amount);
 
         assertEq(aOFT.balanceOf(userA), INITIAL_BALANCE);
+    }
+
+    function test_cant_mint_zero() public {
+        vm.prank(address(aController));
+        vm.expectRevert(wXTM.ZeroAmount.selector);
+        aOFT.mint(userA, 0);
+
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        aOFT.transferWithAuthorization(
+            userA,
+            userB,
+            1 ether,
+            0,
+            block.timestamp + 1 hours,
+            keccak256("wxtm-bad-transfer"),
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
+
+        vm.prank(userB);
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        aOFT.receiveWithAuthorization(
+            userA,
+            userB,
+            1 ether,
+            0,
+            block.timestamp + 1 hours,
+            keccak256("wxtm-bad-receive"),
+            27,
+            bytes32(0),
+            bytes32(uint256(1))
+        );
+
+        vm.expectRevert(EIP3009.EIP3009_InvalidSignature.selector);
+        aOFT.cancelAuthorization(userA, keccak256("wxtm-bad-cancel"), 0, bytes32(0), bytes32(0));
+
+        wXTM tokenImpl = new wXTM(address(endpoints[aEid]));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableInvalidOwner.selector, address(0)));
+        new TransparentUpgradeableProxy(
+            address(tokenImpl),
+            proxyAdmin,
+            abi.encodeWithSelector(wXTM.initialize.selector, "wXTM", "wXTM", "1", address(0))
+        );
     }
 
     function test_wxtm_implementation_initialization_disabled() public {
