@@ -124,9 +124,9 @@ const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
         // not listed here cannot be deployed to.
         admin: {
             mainnet: '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB', // alias/admin-key, prod backend account
-            // Dev admin Safe (2 of 3 dev KMS keys), same address on both testnets.
-            'sepolia-testnet': '0x7dC62F92f5D722BE995309Eb34A9BFF2eC25eE47',
-            'base-sepolia-testnet': '0x7dC62F92f5D722BE995309Eb34A9BFF2eC25eE47',
+            // Testnets: the current DefaultProxyAdmin owners (deployments/<network>/DefaultProxyAdmin.json).
+            'sepolia-testnet': '0x554498c7f1751942D7714aee6Fec976bf4BB72bB', // dev proposer key, alias/eth-signing-key
+            'base-sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
         },
     },
 }
