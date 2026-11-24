@@ -19,7 +19,6 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
@@ -49,6 +48,11 @@ const deploy: DeployFunction = async (hre) => {
     console.log('Lz Address: ', address)
 
     const salt = ethers.utils.id('wXTM-v0.0.1')
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
+        contract: contractName,
+        args: [address],
+        deterministicDeployment: salt,
+    })
 
     const proxy = await deploy(contractName, {
         from: deployer,

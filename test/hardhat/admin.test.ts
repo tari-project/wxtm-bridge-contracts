@@ -34,18 +34,40 @@ describe('admin from named config', function () {
 
     describe('upgrade by a deployer that is not the admin', function () {
         const DEPLOYER = '0x1111111111111111111111111111111111111111'
-        const hreWith = (existing: boolean) =>
-            ({ network: { name: 'mainnet' }, deployments: { getOrNull: async () => (existing ? {} : null) } }) as never
+        const IMPL = '0x2222222222222222222222222222222222222222'
+        const options = { contract: 'wXTM', args: [], deterministicDeployment: '0x01' }
+        const hreWith = (recorded: object | null, differences: boolean, address?: string) =>
+            ({
+                network: { name: 'mainnet' },
+                deployments: {
+                    getOrNull: async () => recorded,
+                    fetchIfDifferent: async () => ({ differences, address }),
+                },
+            }) as never
+        const failure = (hre: never, deployer = DEPLOYER) =>
+            assertDeployerCanUpgrade(hre, 'wXTM', deployer, ADMIN, options).then(
+                () => undefined,
+                (e: Error) => e
+            )
 
-        it('fails before deploying when the proxy exists', async function () {
-            let error: Error | undefined
-            await assertDeployerCanUpgrade(hreWith(true), 'wXTM', DEPLOYER, ADMIN).catch((e: Error) => (error = e))
+        it('fails before deploying when the implementation changed', async function () {
+            const error = await failure(hreWith({ implementation: IMPL }, true))
             expect(error?.message).to.match(/wXTM is already deployed on "mainnet" and its admin is 0xe178/)
         })
 
+        it('fails on a rerun after a half-done upgrade (implementation deployed, proxy not upgraded)', async function () {
+            const error = await failure(hreWith({ implementation: IMPL }, false, ADMIN))
+            expect(error?.message).to.match(/already deployed/)
+        })
+
+        it('allows an unchanged rerun by a deployer that is not the admin', async function () {
+            expect(await failure(hreWith({ implementation: IMPL }, false, IMPL.toUpperCase().replace('0X', '0x')))).to
+                .be.undefined
+        })
+
         it('allows a first deploy, or an upgrade run by the admin', async function () {
-            await assertDeployerCanUpgrade(hreWith(false), 'wXTM', DEPLOYER, ADMIN)
-            await assertDeployerCanUpgrade(hreWith(true), 'wXTM', ADMIN.toLowerCase(), ADMIN)
+            expect(await failure(hreWith(null, true))).to.be.undefined
+            expect(await failure(hreWith({ implementation: IMPL }, true), ADMIN.toLowerCase())).to.be.undefined
         })
     })
 })

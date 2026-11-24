@@ -18,13 +18,17 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
     console.log(`Admin: ${admin}`)
 
     const salt = ethers.utils.id('wXTMController-v0.0.1')
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
+        contract: contractName,
+        args: [],
+        deterministicDeployment: salt,
+    })
 
     const proxy = await deploy(contractName, {
         from: deployer,
