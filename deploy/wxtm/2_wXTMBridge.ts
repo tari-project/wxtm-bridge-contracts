@@ -3,7 +3,7 @@ import assert from 'assert'
 import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { getAdmin } from '../../utils/admin'
+import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
@@ -23,6 +23,7 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)

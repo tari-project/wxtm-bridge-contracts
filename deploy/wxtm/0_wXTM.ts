@@ -6,7 +6,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import { getAdmin } from '../../utils/admin'
+import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTM'
@@ -19,6 +19,7 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
