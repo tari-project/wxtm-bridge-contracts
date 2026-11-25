@@ -1,8 +1,10 @@
+import assert from 'assert'
+
+import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import assert from 'assert'
+import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
-import { ethers } from 'hardhat'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const contractName = 'wXTMBridge'
@@ -20,12 +22,19 @@ const deploy: DeployFunction = async (hre) => {
     const deployedContracts = getDeployments(1)
 
     assert(deployer, 'Missing named deployer account')
+    const admin = await getAdmin(hre)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
+    console.log(`Admin: ${admin}`)
 
     const salt = ethers.utils.id('wXTMBridge-v0.0.1')
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
+        contract: contractName,
+        args: [],
+        deterministicDeployment: salt,
+    })
 
     const proxy = await deploy(contractName, {
         from: deployer,
@@ -36,7 +45,7 @@ const deploy: DeployFunction = async (hre) => {
         skipIfAlreadyDeployed: false,
         proxy: {
             proxyContract: 'OpenZeppelinTransparentProxy',
-            owner: deployer,
+            owner: admin,
             execute: {
                 init: {
                     methodName: 'initialize',

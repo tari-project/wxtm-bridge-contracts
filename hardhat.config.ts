@@ -120,6 +120,14 @@ const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
         deployer: {
             default: 0, // wallet address of index[0], of the mnemonic in .env
         },
+        // Holds every admin power over the wXTM contracts (see utils/admin.ts). No default: a network that is
+        // not listed here cannot be deployed to.
+        admin: {
+            mainnet: '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB', // alias/admin-key, prod backend account
+            // Testnets: the current DefaultProxyAdmin owners (deployments/<network>/DefaultProxyAdmin.json).
+            'sepolia-testnet': '0x554498c7f1751942D7714aee6Fec976bf4BB72bB', // dev proposer key, alias/eth-signing-key
+            'base-sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+        },
     },
 }
 
