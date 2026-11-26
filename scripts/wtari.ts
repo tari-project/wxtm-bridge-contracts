@@ -5,6 +5,9 @@ import fs from 'fs'
 import path from 'path'
 
 export function networkForChain(chainId: string): string {
+    if (!/^\d+$/.test(chainId)) {
+        throw new Error(`Invalid chainId "${chainId}": must be a positive integer`)
+    }
     const file = path.join(__dirname, '..', 'deploy', 'wtari', `${chainId}.json`)
     if (!fs.existsSync(file)) {
         throw new Error(`No wTARI config for chain ${chainId}: ${file} does not exist`)
