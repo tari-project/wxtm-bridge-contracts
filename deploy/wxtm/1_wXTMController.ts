@@ -3,7 +3,7 @@ import assert from 'assert'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
 import {
-    assertDeployerCanUpgrade,
+    assertNoUpgrade,
     assertUpgraded,
     chainDeployments,
     getAdmin,
@@ -31,7 +31,7 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Guardian: ${guardian}`)
 
     const implementation = implementationOptions(contractName)
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, implementation)
+    await assertNoUpgrade(hre, contractName, deployer, implementation)
 
     const proxy = await deploy(contractName, {
         from: deployer,
@@ -54,15 +54,10 @@ const deploy: DeployFunction = async (hre) => {
                         guardian,
                     ],
                 },
-                // Existing proxies keep their minters and admin; this only grants PAUSER_ROLE to the guardian.
-                onUpgrade: {
-                    methodName: 'initializeV2',
-                    args: [guardian],
-                },
             },
         },
     })
-    await assertUpgraded(hre, contractName, proxy, guardian)
+    await assertUpgraded(hre, contractName, proxy, admin, guardian)
 
     console.log(
         `wXTMController proxy contract deployed to network: ${hre.network.name}, address: ${proxy.address}, implementation: ${proxy.implementation}`

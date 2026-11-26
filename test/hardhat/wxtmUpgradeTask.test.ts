@@ -1,8 +1,16 @@
 import { expect } from 'chai'
 import { ethers } from 'ethers'
-import { artifacts } from 'hardhat'
+import hre, { artifacts, deployments } from 'hardhat'
+import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
-import { upgradeCalldata } from '../../tasks/wxtm'
+import { upgradeCalldata, upgradeCalldataAction } from '../../tasks/wxtm'
+import { assertNoUpgrade, implementationOptions } from '../../utils/admin'
+
+const refusal = (promise: Promise<unknown>) =>
+    promise.then(
+        () => undefined,
+        (e: Error) => e.message
+    )
 
 describe('upgrade-calldata:wxtm', function () {
     const PROXY = '0x810be828EFA687667B289C488A57a7B48Fb4523E'
@@ -29,4 +37,48 @@ describe('upgrade-calldata:wxtm', function () {
             expect(call.args.map(String)).to.deep.equal([...expected])
         })
     }
+
+    it('upgrades a proxy on the hardhat network: refusals, upgradeAndCall, --check records it', async function () {
+        const [deployer, admin, stranger] = await hre.ethers.getSigners()
+        const from = deployer.address
+        // Any contract stands in for the guardian Safe; wTARIBridge stands in for the old implementation.
+        const guardian = (await deployments.deploy('GuardianStandIn', { contract: 'wTARIBridge', from })).address
+        await deployments.deploy('wXTMBridge', {
+            contract: 'wTARIBridge',
+            from,
+            proxy: { proxyContract: 'OpenZeppelinTransparentProxy', owner: admin.address },
+        })
+        const before = await deployments.get('wXTMBridge')
+
+        const withAdmin = (configuredAdmin: string) =>
+            Object.assign(Object.create(hre), {
+                getNamedAccounts: async () => ({ deployer: from, admin: configuredAdmin, guardian }),
+            }) as HardhatRuntimeEnvironment
+        const run = (flags: { deployImplementation?: boolean; check?: boolean }, configuredAdmin = admin.address) =>
+            upgradeCalldataAction(
+                { contract: 'wXTMBridge', deployImplementation: false, check: false, ...flags },
+                withAdmin(configuredAdmin)
+            )
+        const deployScriptRefusal = () =>
+            refusal(assertNoUpgrade(hre, 'wXTMBridge', from, implementationOptions('wXTMBridge')))
+
+        expect(await refusal(run({}, stranger.address))).to.match(/owned by 0x.*, not the configured admin/)
+        expect(await refusal(run({}))).to.match(/is not the compiled wXTMBridge/)
+        expect(await deployScriptRefusal()).to.match(/never upgrades/)
+
+        const tx = await run({ deployImplementation: true })
+        expect(await deployScriptRefusal()).to.match(/never upgrades/) // implementation deployed, proxy not upgraded
+        expect(await refusal(run({ check: true }))).to.match(/not upgraded and set up/)
+
+        await (await admin.sendTransaction({ to: tx?.to, data: tx?.data })).wait()
+        expect(await refusal(run({}))).to.match(/already runs 0x.* and is set up/)
+        await run({ check: true })
+
+        const after = await deployments.get('wXTMBridge')
+        const implementation = (await deployments.get('wXTMBridge_Implementation')).address
+        expect(after.implementation).to.equal(implementation).and.not.equal(before.implementation)
+        expect(after.abi.map((fragment) => fragment.name)).to.include.members(['initializeV2', 'pause', 'PAUSER_ROLE'])
+        expect([after.address, after.args, after.receipt]).to.deep.equal([before.address, before.args, before.receipt])
+        expect(await deployScriptRefusal()).to.be.undefined // a deploy rerun is now a no-op
+    })
 })

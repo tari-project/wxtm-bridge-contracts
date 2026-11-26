@@ -2,7 +2,7 @@ import { expect } from 'chai'
 import { ethers } from 'ethers'
 import { deployments } from 'hardhat'
 
-import { assertDeployerCanUpgrade, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
+import { assertNoUpgrade, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -112,97 +112,81 @@ describe('admin from named config', function () {
         })
     })
 
-    describe('upgrade that hardhat-deploy cannot complete', function () {
+    describe('deploy scripts never upgrade', function () {
         const DEPLOYER = '0x1111111111111111111111111111111111111111'
         const IMPL = '0x2222222222222222222222222222222222222222'
+        const OTHER = '0x5555555555555555555555555555555555555555'
         const options = { contract: 'wXTM', args: [], deterministicDeployment: '0x01' }
         const PROXY = '0x3333333333333333333333333333333333333333'
-        const DEFAULT_PROXY_ADMIN = '0x67d3d893ce36D9628B82Be2860Cd5c021227B3bE'
-        const hreWith = (
-            recorded: object | null,
-            differences: boolean,
-            address?: string,
-            proxyAdmin = DEFAULT_PROXY_ADMIN
-        ) =>
+        const hreWith = (recorded: object | null, differences: boolean, address?: string, running = IMPL) =>
             ({
                 network: { name: 'mainnet' },
                 deployments: {
-                    getOrNull: async (name: string) =>
-                        name === 'DefaultProxyAdmin' ? { address: DEFAULT_PROXY_ADMIN } : recorded,
+                    getOrNull: async () => recorded,
                     fetchIfDifferent: async () => ({ differences, address }),
                 },
-                ethers: { provider: { getStorageAt: async () => ethers.utils.hexZeroPad(proxyAdmin, 32) } },
+                ethers: { provider: { getStorageAt: async () => ethers.utils.hexZeroPad(running, 32) } },
             }) as never
-        const failure = (hre: never, deployer = DEPLOYER) =>
-            assertDeployerCanUpgrade(hre, 'wXTM', deployer, ADMIN, options).then(
+        const failure = (hre: never) =>
+            assertNoUpgrade(hre, 'wXTM', DEPLOYER, options).then(
                 () => undefined,
                 (e: Error) => e
             )
+        const record = { address: PROXY, implementation: IMPL }
 
         it('fails before deploying when the implementation changed', async function () {
-            const error = await failure(hreWith({ address: PROXY, implementation: IMPL }, true))
-            expect(error?.message).to.match(/wXTM is already deployed on "mainnet" and its admin is 0xe178/)
+            const error = await failure(hreWith(record, true))
+            expect(error?.message).to.match(/wXTM is already deployed on "mainnet".*upgrade-calldata:wxtm/)
         })
 
-        it('fails on a rerun after a half-done upgrade (implementation deployed, proxy not upgraded)', async function () {
-            const error = await failure(hreWith({ address: PROXY, implementation: IMPL }, false, ADMIN))
-            expect(error?.message).to.match(/already deployed/)
+        it('fails when the new implementation already sits at its CREATE2 address (half-done upgrade)', async function () {
+            expect((await failure(hreWith(record, false, OTHER)))?.message).to.match(/never upgrades/)
         })
 
-        it('allows an unchanged rerun by a deployer that is not the admin', async function () {
-            expect(
-                await failure(
-                    hreWith({ address: PROXY, implementation: IMPL }, false, IMPL.toUpperCase().replace('0X', '0x'))
-                )
-            ).to.be.undefined
+        it('fails when the proxy does not run the recorded implementation', async function () {
+            expect((await failure(hreWith(record, false, IMPL, OTHER)))?.message).to.match(/runs 0x5555/)
         })
 
-        it('allows a first deploy, or an upgrade run by the admin', async function () {
+        it('allows a first deploy and an unchanged rerun', async function () {
             expect(await failure(hreWith(null, true))).to.be.undefined
-            expect(await failure(hreWith({ address: PROXY, implementation: IMPL }, true), ADMIN.toLowerCase())).to.be
-                .undefined
-        })
-
-        it('fails before deploying an upgrade of a proxy that DefaultProxyAdmin does not administer', async function () {
-            const other = '0x99fe3Eb343098811BA05BBA802D9f66e6A3960D2'
-            const error = await failure(
-                hreWith({ address: PROXY, implementation: IMPL }, true, undefined, other),
-                ADMIN
-            )
-            expect(error?.message).to.match(/administered by 0x99fe.*not DefaultProxyAdmin.*upgradeAndCall/)
+            expect(await failure(hreWith(record, false, IMPL.toUpperCase().replace('0X', '0x')))).to.be.undefined
         })
     })
 
-    describe('upgrade recorded by hardhat-deploy', function () {
+    describe('upgrade and setup on-chain', function () {
         const IMPL = '0x2222222222222222222222222222222222222222'
         const GUARDIAN = '0x4444444444444444444444444444444444444444'
         const proxy = { address: '0x3333333333333333333333333333333333333333', implementation: IMPL }
-        const hreWith = (running: string, guardianCanPause: boolean) =>
+        const PAUSER_ROLE = ethers.utils.id('PAUSER_ROLE').slice(2)
+        const hreWith = (running: string, guardianCanPause: boolean, adminIsAdmin = true) =>
             ({
                 network: { name: 'mainnet' },
                 ethers: {
                     provider: {
                         getStorageAt: async () => ethers.utils.hexZeroPad(running, 32),
-                        call: async () => ethers.utils.defaultAbiCoder.encode(['bool'], [guardianCanPause]),
+                        call: async ({ data }: { data: string }) =>
+                            ethers.utils.defaultAbiCoder.encode(
+                                ['bool'],
+                                [data.includes(PAUSER_ROLE) ? guardianCanPause : adminIsAdmin]
+                            ),
                     },
                 },
             }) as never
         const failure = (hre: never) =>
-            assertUpgraded(hre, 'wXTMBridge', proxy, GUARDIAN).then(
+            assertUpgraded(hre, 'wXTMBridge', proxy, ADMIN, GUARDIAN).then(
                 () => undefined,
                 (e: Error) => e
             )
 
-        it('fails when the proxy does not run the recorded implementation', async function () {
-            const error = await failure(hreWith(ADMIN, true))
-            expect(error?.message).to.match(/records an upgrade that did not happen.*upgradeAndCall/)
+        it('names each failed check', async function () {
+            expect((await failure(hreWith(ADMIN, true)))?.message).to.match(/it runs 0xe178.*upgrade-calldata:wxtm/)
+            expect((await failure(hreWith(IMPL, false)))?.message).to.match(/guardian 0x4444.* lacks PAUSER_ROLE/)
+            expect((await failure(hreWith(IMPL, true, false)))?.message).to.match(
+                /admin 0xe178.* lacks DEFAULT_ADMIN_ROLE/
+            )
         })
 
-        it('fails when the guardian has no PAUSER_ROLE', async function () {
-            expect((await failure(hreWith(IMPL, false)))?.message).to.match(/has PAUSER_ROLE: false/)
-        })
-
-        it('passes when the proxy runs the recorded implementation and the guardian can pause', async function () {
+        it('passes when the proxy runs the implementation and admin and guardian hold their roles', async function () {
             expect(await failure(hreWith(IMPL, true))).to.be.undefined
         })
     })

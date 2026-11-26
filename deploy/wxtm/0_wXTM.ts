@@ -6,7 +6,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
+import { assertNoUpgrade, getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTM'
@@ -48,7 +48,7 @@ const deploy: DeployFunction = async (hre) => {
     console.log('Lz Address: ', address)
 
     const salt = ethers.utils.id('wXTM-v0.0.1')
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
+    await assertNoUpgrade(hre, contractName, deployer, {
         contract: contractName,
         args: [address],
         deterministicDeployment: salt,

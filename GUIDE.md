@@ -7,7 +7,9 @@
 `npx hardhat lz:deploy`
 `yarn hardhat lz:deploy --tags wXTMController`
 
-#### **Upgrade a proxy hardhat-deploy cannot upgrade (deployer is not the admin, or a ProxyAdmin other than DefaultProxyAdmin)**
+#### **Upgrade wXTMBridge or wXTMController**
+
+The deploy scripts only deploy new proxies (and rerun as no-ops); they refuse to upgrade. wXTM is not upgraded.
 
 1. `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --deploy-implementation` deploys the
    implementation from the deployer and prints the `upgradeAndCall` transaction for the ProxyAdmin owner to sign.
