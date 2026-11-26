@@ -2,16 +2,35 @@
 pragma solidity ^0.8.22;
 
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IwXTM } from "./interfaces/IwXTM.sol";
 
-contract wXTMBridge is Initializable {
+contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
     using SafeERC20 for IERC20;
 
     error InsufficientAmount();
+    error InvalidAmountPrecision();
+    error InvalidTargetTariAddress();
 
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @dev Above every version already used on a deployed proxy (mainnet 1, Sepolia 101).
+    uint64 private constant ACCESS_VERSION = 102;
+
+    /// @dev Tari has 6 decimals, wXTM 18: anything below 1e12 cannot be paid out and would be burned for nothing.
+    uint256 private constant TARI_UNIT = 1e12;
+
+    /// @dev Base58 Tari address lengths, as accepted by TariAddress::from_base58
+    /// (tari base_layer/common_types/src/tari_address/mod.rs): a single address (35 bytes) encodes to 45-48
+    /// characters, a dual address (67 bytes plus a payment id of up to 256 bytes) to 89-443. Unlike the wTARI
+    /// bridge (Ootle targets, any 1-128 bytes), the target here is always a Tari L1 address.
+    uint256 private constant MIN_TARGET_TARI_ADDRESS_LENGTH = 45;
+    uint256 private constant MAX_TARGET_TARI_ADDRESS_LENGTH = 443;
+
+    // Only linear state; AccessControl and Pausable live in ERC-7201 namespaced storage, so these keep their slots.
     uint256 private nonce;
     address private wXTM;
 
@@ -21,12 +40,28 @@ contract wXTMBridge is Initializable {
         _disableInitializers();
     }
 
-    function initialize(address _wXTM) external initializer {
+    /// @notice Initializer for a new proxy. Shares ACCESS_VERSION with initializeV2, so only one of them can ever run.
+    function initialize(address _wXTM, address admin, address guardian) external reinitializer(ACCESS_VERSION) {
         wXTM = _wXTM;
+        _initializeAccess(admin, guardian);
     }
 
-    function bridgeToTari(string memory targetTariAddress, uint256 value) external {
-        if (value < 1000 ether) revert InsufficientAmount();
+    /// @notice Upgrade of an existing proxy; must be called atomically through ProxyAdmin.upgradeAndCall.
+    function initializeV2(address admin, address guardian) external reinitializer(ACCESS_VERSION) {
+        _initializeAccess(admin, guardian);
+    }
+
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+
+    function bridgeToTari(string memory targetTariAddress, uint256 value) external whenNotPaused {
+        _checkValue(value);
+        _checkTargetTariAddress(targetTariAddress);
 
         IERC20(wXTM).safeTransferFrom(msg.sender, address(this), value);
 
@@ -46,8 +81,9 @@ contract wXTMBridge is Initializable {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
-        if (value < 1000 ether) revert InsufficientAmount();
+    ) external whenNotPaused {
+        _checkValue(value);
+        _checkTargetTariAddress(targetTariAddress);
 
         IwXTM(wXTM).receiveWithAuthorization(
             msg.sender,
@@ -66,5 +102,33 @@ contract wXTMBridge is Initializable {
         emit TokensUnwrapped(msg.sender, targetTariAddress, value, nonce);
 
         nonce++;
+    }
+
+    function _initializeAccess(address admin, address guardian) private {
+        __AccessControl_init();
+        __Pausable_init();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(PAUSER_ROLE, guardian);
+    }
+
+    function _checkValue(uint256 value) private pure {
+        if (value < 1000 ether) revert InsufficientAmount();
+        if (value % TARI_UNIT != 0) revert InvalidAmountPrecision();
+    }
+
+    /// @dev Length and base58 alphabet only; the checksum is validated off-chain.
+    function _checkTargetTariAddress(string memory targetTariAddress) private pure {
+        bytes memory b = bytes(targetTariAddress);
+        if (b.length < MIN_TARGET_TARI_ADDRESS_LENGTH || b.length > MAX_TARGET_TARI_ADDRESS_LENGTH) {
+            revert InvalidTargetTariAddress();
+        }
+        for (uint256 i = 0; i < b.length; i++) {
+            bytes1 c = b[i];
+            bool isBase58 = (c >= "1" && c <= "9") ||
+                (c >= "A" && c <= "Z" && c != "I" && c != "O") ||
+                (c >= "a" && c <= "z" && c != "l");
+            if (!isBase58) revert InvalidTargetTariAddress();
+        }
     }
 }

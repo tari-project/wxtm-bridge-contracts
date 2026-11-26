@@ -18,6 +18,21 @@ export async function getAdmin(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAcc
 }
 
 /**
+ * The `guardian` named account for this network: the Safe that may pause wXTMBridge and wXTMController (only the
+ * admin can unpause). Like the admin, never falls back to the deployer.
+ */
+export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network'>) {
+    const { guardian } = await hre.getNamedAccounts()
+    if (!guardian || guardian === ethers.constants.AddressZero) {
+        throw new Error(
+            `No guardian for network "${hre.network.name}": set namedAccounts.guardian["${hre.network.name}"] in hardhat.config.ts ` +
+                `to the Safe that must hold PAUSER_ROLE.`
+        )
+    }
+    return guardian
+}
+
+/**
  * Fails before deploying when `name` already exists, the deployer is not the admin, and the deploy would upgrade it:
  * the implementation differs from the deployed one. hardhat-deploy would deploy the new implementation from the
  * deployer, then fail to send the upgrade from the admin; a rerun then records the new implementation in

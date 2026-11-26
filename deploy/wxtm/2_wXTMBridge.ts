@@ -3,7 +3,7 @@ import assert from 'assert'
 import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
+import { assertDeployerCanUpgrade, getAdmin, getGuardian } from '../../utils/admin'
 import verify from '../../utils/verify'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
@@ -23,11 +23,13 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
+    const guardian = await getGuardian(hre)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
     console.log(`Admin: ${admin}`)
+    console.log(`Guardian: ${guardian}`)
 
     const salt = ethers.utils.id('wXTMBridge-v0.0.1')
     await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
@@ -49,12 +51,13 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: [deployedContracts.wXTM],
+                    args: [deployedContracts.wXTM, admin, guardian],
                 },
-                // onUpgrade: {
-                //     methodName: 'initialize',
-                //     args: [deployedContracts.wXTM],
-                // },
+                // Existing proxies keep their wXTM; this only adds the admin and the guardian.
+                onUpgrade: {
+                    methodName: 'initializeV2',
+                    args: [admin, guardian],
+                },
             },
         },
     })

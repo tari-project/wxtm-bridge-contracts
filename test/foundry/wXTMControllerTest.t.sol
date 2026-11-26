@@ -5,6 +5,8 @@ pragma solidity ^0.8.22;
 import { wXTM } from "../../contracts/wXTM.sol";
 import { wXTMController } from "../../contracts/wXTMController.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 // DevTools imports
 import { console } from "forge-std/Test.sol";
@@ -15,6 +17,7 @@ contract wXTMControllerTest is TestHelperOz5 {
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 private constant LOW_MINTER_ROLE = keccak256("LOW_MINTER_ROLE");
     bytes32 private constant HIGH_MINTER_ROLE = keccak256("HIGH_MINTER_ROLE");
+    bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint32 private aEid = 1;
     uint32 private bEid = 2;
@@ -26,6 +29,7 @@ contract wXTMControllerTest is TestHelperOz5 {
     address private lowMinter;
     address private highMinter;
     address private user;
+    address private guardian;
 
     uint256 private constant INITIAL_BALANCE = 100 ether;
 
@@ -34,6 +38,7 @@ contract wXTMControllerTest is TestHelperOz5 {
         lowMinter = makeAddr("lowMinter");
         highMinter = makeAddr("highMinter");
         user = makeAddr("user");
+        guardian = makeAddr("guardian");
 
         deal(admin, INITIAL_BALANCE);
 
@@ -53,7 +58,14 @@ contract wXTMControllerTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTMController).creationCode,
                 abi.encode(),
-                abi.encodeWithSelector(wXTMController.initialize.selector, address(wxtm), lowMinter, highMinter, admin)
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(wxtm),
+                    lowMinter,
+                    highMinter,
+                    admin,
+                    guardian
+                )
             )
         );
 
@@ -128,6 +140,65 @@ contract wXTMControllerTest is TestHelperOz5 {
         assertFalse(controller.hasRole(HIGH_MINTER_ROLE, highMinter));
         assertTrue(controller.hasRole(LOW_MINTER_ROLE, newLowMinter));
         assertTrue(controller.hasRole(HIGH_MINTER_ROLE, newHighMinter));
+    }
+
+    function test_role_getters_match_interface() public view {
+        assertEq(controller.LOW_MINTER_ROLE(), LOW_MINTER_ROLE);
+        assertEq(controller.HIGH_MINTER_ROLE(), HIGH_MINTER_ROLE);
+        assertEq(controller.PAUSER_ROLE(), PAUSER_ROLE);
+    }
+
+    function test_paused_controller_rejects_both_mints() public {
+        vm.prank(guardian);
+        controller.pause();
+
+        vm.prank(lowMinter);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        controller.mintLowAmount(user, 5);
+
+        vm.prank(highMinter);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        controller.mintHighAmount(user, 5);
+
+        vm.prank(admin);
+        controller.unpause();
+
+        vm.prank(lowMinter);
+        controller.mintLowAmount(user, 5);
+        vm.prank(highMinter);
+        controller.mintHighAmount(user, 5);
+        assertEq(wxtm.balanceOf(user), 10);
+    }
+
+    function test_only_guardian_pauses_only_admin_unpauses() public {
+        assertTrue(controller.hasRole(PAUSER_ROLE, guardian));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, admin, PAUSER_ROLE)
+        );
+        controller.pause();
+
+        vm.prank(guardian);
+        controller.pause();
+
+        vm.prank(guardian);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, guardian, bytes32(0))
+        );
+        controller.unpause();
+
+        vm.prank(admin);
+        controller.unpause();
+        assertFalse(controller.paused());
+    }
+
+    function test_initializers_run_once() public {
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initializeV2(user);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initialize(address(wxtm), user, user, user, user);
     }
 
     /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */

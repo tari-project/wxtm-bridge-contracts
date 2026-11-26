@@ -87,7 +87,14 @@ contract wXTMTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTMController).creationCode,
                 abi.encode(),
-                abi.encodeWithSelector(wXTMController.initialize.selector, address(aOFT), lowMinter, highMinter, admin)
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(aOFT),
+                    lowMinter,
+                    highMinter,
+                    admin,
+                    admin
+                )
             )
         );
 
@@ -96,7 +103,14 @@ contract wXTMTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTMController).creationCode,
                 abi.encode(),
-                abi.encodeWithSelector(wXTMController.initialize.selector, address(bOFT), lowMinter, highMinter, admin)
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(bOFT),
+                    lowMinter,
+                    highMinter,
+                    admin,
+                    admin
+                )
             )
         );
 

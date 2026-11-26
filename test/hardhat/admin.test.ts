@@ -2,12 +2,16 @@ import { expect } from 'chai'
 import { ethers } from 'ethers'
 import { deployments } from 'hardhat'
 
-import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
+import { assertDeployerCanUpgrade, getAdmin, getGuardian } from '../../utils/admin'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
 function hreWithAdmin(admin?: string) {
     return { network: { name: 'mainnet' }, getNamedAccounts: async () => (admin ? { admin } : {}) } as never
+}
+
+function hreWithGuardian(guardian?: string) {
+    return { network: { name: 'mainnet' }, getNamedAccounts: async () => (guardian ? { guardian } : {}) } as never
 }
 
 describe('admin from named config', function () {
@@ -30,6 +34,19 @@ describe('admin from named config', function () {
 
     it('returns the configured admin', async function () {
         expect(await getAdmin(hreWithAdmin(ADMIN))).to.equal(ADMIN)
+    })
+
+    it('rejects an unset or zero guardian', async function () {
+        for (const guardian of [undefined, ethers.constants.AddressZero]) {
+            let error: Error | undefined
+            await getGuardian(hreWithGuardian(guardian)).catch((e: Error) => (error = e))
+            expect(error?.message).to.match(/set namedAccounts\.guardian\["mainnet"\]/)
+        }
+    })
+
+    it('returns the configured guardian', async function () {
+        const guardian = '0x3333333333333333333333333333333333333333'
+        expect(await getGuardian(hreWithGuardian(guardian))).to.equal(guardian)
     })
 
     describe('upgrade by a deployer that is not the admin', function () {

@@ -3,7 +3,7 @@ import assert from 'assert'
 import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
+import { assertDeployerCanUpgrade, getAdmin, getGuardian } from '../../utils/admin'
 import verify from '../../utils/verify'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
@@ -18,10 +18,12 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
+    const guardian = await getGuardian(hre)
 
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
     console.log(`Admin: ${admin}`)
+    console.log(`Guardian: ${guardian}`)
 
     const salt = ethers.utils.id('wXTMController-v0.0.1')
     await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
@@ -48,17 +50,14 @@ const deploy: DeployFunction = async (hre) => {
                         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
                         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
                         admin,
+                        guardian,
                     ],
                 },
-                // onUpgrade: {
-                //     methodName: 'initialize',
-                //     args: [
-                //         deployedContracts.wXTM,
-                //         '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
-                //         '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                //         admin,
-                //     ],
-                // },
+                // Existing proxies keep their minters and admin; this only grants PAUSER_ROLE to the guardian.
+                onUpgrade: {
+                    methodName: 'initializeV2',
+                    args: [guardian],
+                },
             },
         },
     })
