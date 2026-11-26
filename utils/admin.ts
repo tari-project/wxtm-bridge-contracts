@@ -58,6 +58,8 @@ export async function assertDeployerCanUpgrade(
     throw new Error(
         `${name} is already deployed on "${hre.network.name}" and its admin is ${admin}, not the deployer ${deployer}. ` +
             `Upgrading from here would deploy the implementation but not upgrade the proxy, and record an upgrade ` +
-            `that never happened. Run the deploy as the admin, or deploy the implementation and have the admin upgrade.`
+            `that never happened. Run the deploy as the admin, or deploy the implementation and have the admin upgrade ` +
+            `with ProxyAdmin.upgradeAndCall and the script's onUpgrade calldata (initializeV2 for wXTMBridge and ` +
+            `wXTMController), never upgrade() followed by a separate call: anyone could call the initializer in between.`
     )
 }

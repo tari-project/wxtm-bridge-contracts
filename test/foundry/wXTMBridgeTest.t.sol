@@ -17,6 +17,8 @@ contract wXTMBridgeTest is TestHelperOz5 {
 
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    // OpenZeppelin Initializable's ERC-7201 slot; its low 8 bytes hold the initialized version.
+    bytes32 private constant INITIALIZABLE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
 
     // Dual Tari address (91 characters).
     string private constant TARI_ADDRESS =
@@ -344,6 +346,16 @@ contract wXTMBridgeTest is TestHelperOz5 {
         vm.prank(multiSig);
         bridge.unpause();
         assertFalse(bridge.paused());
+    }
+
+    function test_initialize_rejected_on_live_proxy_upgraded_without_setup() public {
+        // A live proxy initialized at version 1 by the old `initializer`, upgraded without a setup call.
+        wXTMBridge live = wXTMBridge(address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, "")));
+        vm.store(address(live), INITIALIZABLE_SLOT, bytes32(uint256(1)));
+
+        vm.prank(user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        live.initialize(address(wxtm), user, user);
     }
 
     function test_initializers_run_once() public {

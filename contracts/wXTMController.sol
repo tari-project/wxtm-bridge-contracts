@@ -24,6 +24,12 @@ contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
         _disableInitializers();
     }
 
+    /// @dev Keeps initialize off live proxies (initialized at version 1 or more) whose upgrade did not set them up.
+    modifier onlyNewProxy() {
+        if (_getInitializedVersion() != 0) revert InvalidInitialization();
+        _;
+    }
+
     /// @notice Initializer for a new proxy. Shares PAUSER_VERSION with initializeV2, so only one of them can ever run.
     function initialize(
         address _wxtm,
@@ -31,7 +37,7 @@ contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
         address highMinter,
         address admin,
         address guardian
-    ) external reinitializer(PAUSER_VERSION) {
+    ) external onlyNewProxy reinitializer(PAUSER_VERSION) {
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);

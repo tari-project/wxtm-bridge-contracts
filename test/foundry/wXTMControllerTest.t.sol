@@ -18,6 +18,8 @@ contract wXTMControllerTest is TestHelperOz5 {
     bytes32 private constant LOW_MINTER_ROLE = keccak256("LOW_MINTER_ROLE");
     bytes32 private constant HIGH_MINTER_ROLE = keccak256("HIGH_MINTER_ROLE");
     bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    // OpenZeppelin Initializable's ERC-7201 slot; its low 8 bytes hold the initialized version.
+    bytes32 private constant INITIALIZABLE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
 
     uint32 private aEid = 1;
     uint32 private bEid = 2;
@@ -191,6 +193,18 @@ contract wXTMControllerTest is TestHelperOz5 {
         vm.prank(admin);
         controller.unpause();
         assertFalse(controller.paused());
+    }
+
+    function test_initialize_rejected_on_live_proxy_upgraded_without_setup() public {
+        // A live proxy initialized at version 1 by the old `initializer`, upgraded without a setup call.
+        wXTMController live = wXTMController(
+            address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
+        );
+        vm.store(address(live), INITIALIZABLE_SLOT, bytes32(uint256(1)));
+
+        vm.prank(user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        live.initialize(address(wxtm), user, user, user, user);
     }
 
     function test_initializers_run_once() public {

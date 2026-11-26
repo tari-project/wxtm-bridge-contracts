@@ -40,8 +40,18 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
         _disableInitializers();
     }
 
+    /// @dev Keeps initialize off live proxies (initialized at version 1 or more) whose upgrade did not set them up.
+    modifier onlyNewProxy() {
+        if (_getInitializedVersion() != 0) revert InvalidInitialization();
+        _;
+    }
+
     /// @notice Initializer for a new proxy. Shares ACCESS_VERSION with initializeV2, so only one of them can ever run.
-    function initialize(address _wXTM, address admin, address guardian) external reinitializer(ACCESS_VERSION) {
+    function initialize(
+        address _wXTM,
+        address admin,
+        address guardian
+    ) external onlyNewProxy reinitializer(ACCESS_VERSION) {
         wXTM = _wXTM;
         _initializeAccess(admin, guardian);
     }

@@ -4,6 +4,7 @@ pragma solidity ^0.8.22;
 import { Test } from "forge-std/Test.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { wXTMBridge } from "../../contracts/wXTMBridge.sol";
@@ -67,6 +68,19 @@ contract wXTMUpgradeForkTest is Test {
         assertTrue(controller.hasRole(PAUSER_ROLE, guardian));
         assertFalse(bridge.paused());
         assertFalse(controller.paused());
+    }
+
+    function test_initializers_closed_after_upgrade() public {
+        vm.startPrank(user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bridge.initialize(user, user, user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bridge.initializeV2(user, user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initialize(WXTM, user, user, user, user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initializeV2(user);
+        vm.stopPrank();
     }
 
     function test_mint_and_unwrap_still_work() public {
