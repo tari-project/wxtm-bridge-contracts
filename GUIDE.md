@@ -9,10 +9,12 @@
 
 #### **Upgrade wXTMBridge or wXTMController**
 
-The deploy scripts only deploy new proxies (and rerun as no-ops); they refuse to upgrade. wXTM is not upgraded.
+The deploy scripts only deploy new proxies. For a proxy that is already recorded they deploy nothing: wXTM is left
+alone, and wXTMBridge/wXTMController are only checked (upgraded and set up). Upgrades go through this task:
 
 1. `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --deploy-implementation` deploys the
-   implementation from the deployer and prints the `upgradeAndCall` transaction for the ProxyAdmin owner to sign.
+   CREATE2 implementation (same salt as the deploy scripts) from the deployer and prints the `upgradeAndCall`
+   transaction for the ProxyAdmin owner to sign.
 2. After it is executed, `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --check`
    verifies the upgrade and records it in `deployments/mainnet`.
 

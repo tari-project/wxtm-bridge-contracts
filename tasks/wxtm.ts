@@ -28,7 +28,12 @@ export function upgradeCalldata(name: Name, proxy: string, implementation: strin
     return { setup, data }
 }
 
-type Args = { contract: string; implementation?: string; deployImplementation: boolean; check: boolean }
+type Args = { contract: string; deployImplementation: boolean; check: boolean }
+
+// OpenZeppelin v5 Initializable's ERC-7201 slot (uint64 _initialized in the low bytes), and the reinitializer version
+// initializeV2 sets.
+const INITIALIZABLE_SLOT = '0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00'
+const SETUP_VERSION: { [name in Name]: bigint } = { wXTMBridge: 102n, wXTMController: 12n }
 
 /**
  * The upgrade-calldata:wxtm action; returns the transaction it prints (print mode). Exported so a test can run it
@@ -54,30 +59,27 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
                 `transfer its ownership to the admin or fix namedAccounts.admin before signing anything.`
         )
     }
-    if (args.deployImplementation) {
-        const { deployer } = await hre.getNamedAccounts()
-        await hre.deployments.deploy(`${name}_Implementation`, {
-            ...implementationOptions(name),
-            from: deployer,
-            log: true,
-            waitConfirmations: hre.network.live ? 5 : 1,
-        })
-    }
+    // Always the CREATE2 implementation deploy/wxtm would use, so the records match what the scripts compute.
+    const { deployer } = await hre.getNamedAccounts()
+    const { deterministicDeployment: salt, ...options } = implementationOptions(name)
+    const create2 = await hre.deployments.deterministic(`${name}_Implementation`, {
+        ...options,
+        salt,
+        from: deployer,
+        log: true,
+        waitConfirmations: hre.network.live ? 5 : 1,
+    })
+    if (args.deployImplementation) await create2.deploy()
+    const implementation = create2.address
     const recorded = (await hre.deployments.get(`${name}_Implementation`)).address
-    const implementation = args.implementation ?? recorded
     const artifact = await hre.deployments.getExtendedArtifact(name)
     const code = await hre.ethers.provider.getCode(implementation)
     if (code.toLowerCase() !== artifact.deployedBytecode?.toLowerCase()) {
-        throw new Error(
-            `${implementation} is not the compiled ${name}: pass --deploy-implementation or the right --implementation`
-        )
+        throw new Error(`${implementation} is not the compiled ${name}: pass --deploy-implementation`)
     }
-    const upgraded = await assertUpgraded(hre, name, { address: proxy.address, implementation }, admin, guardian).then(
-        () => true,
-        (e: Error) => (args.check ? Promise.reject(e) : false)
-    )
 
     if (args.check) {
+        await assertUpgraded(hre, name, { address: proxy.address, implementation }, admin, guardian)
         // Record the upgrade the way hardhat-deploy would have, so later deploys and --check see it.
         const proxyAbi = (await hre.deployments.get(`${name}_Proxy`)).abi
         const abi = mergeABIs([proxyAbi, artifact.abi], { check: false, skipSupportsInterface: true })
@@ -91,9 +93,16 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
         return
     }
 
-    if (upgraded) throw new Error(`${name} ${proxy.address} already runs ${implementation} and is set up`)
-    // The proxy may already run it after a plain upgrade() without the setup: upgradeAndCall finishes that.
     const running = await slotAddress(hre, proxy.address, EIP1967_IMPLEMENTATION_SLOT)
+    if (running.toLowerCase() === implementation.toLowerCase()) {
+        // Once initializeV2 has run, another upgradeAndCall with it is certain to revert: report what is wrong instead.
+        const slot = await hre.ethers.provider.getStorageAt(proxy.address, INITIALIZABLE_SLOT)
+        if (BigInt(slot) % 2n ** 64n >= SETUP_VERSION[name]) {
+            await assertUpgraded(hre, name, { address: proxy.address, implementation }, admin, guardian)
+            throw new Error(`${name} ${proxy.address} already runs ${implementation} and is set up`)
+        }
+    }
+    // The proxy may already run it after a plain upgrade() without the setup: upgradeAndCall finishes that.
     const { setup, data } = upgradeCalldata(name, proxy.address, implementation, admin, guardian)
     console.log(`${name} ${proxy.address} runs ${running}`)
     console.log(`ProxyAdmin owner ${owner} sends to ProxyAdmin ${proxyAdmin} (value 0):`)
@@ -109,13 +118,7 @@ task(
     'Print the ProxyAdmin.upgradeAndCall transaction for the admin to sign; --check verifies and records it'
 )
     .addParam('contract', 'wXTMController or wXTMBridge', undefined, types.string)
-    .addOptionalParam(
-        'implementation',
-        'New implementation (default: deployments/<network>/<contract>_Implementation.json)',
-        undefined,
-        types.string
-    )
-    .addFlag('deployImplementation', 'First deploy the implementation from the deployer, as deploy/wxtm would')
+    .addFlag('deployImplementation', 'First deploy the CREATE2 implementation from the deployer, as deploy/wxtm would')
     .addFlag(
         'check',
         'Verify the proxy runs the implementation and admin and guardian hold their roles, then record it'

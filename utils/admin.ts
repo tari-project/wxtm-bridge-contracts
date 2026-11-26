@@ -1,6 +1,5 @@
 import { ethers } from 'ethers'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
-import { DeployOptions } from 'hardhat-deploy/types'
 
 import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 
@@ -48,50 +47,25 @@ export async function slotAddress(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>
     return ethers.utils.getAddress(ethers.utils.hexDataSlice(await hre.ethers.provider.getStorageAt(address, slot), 12))
 }
 
-/**
- * deploy/wxtm only deploys new proxies and reruns that change nothing; upgrades of wXTMBridge and wXTMController go
- * through `upgrade-calldata:wxtm`, and wXTM is not upgraded from this repo. So when `name` already exists, fails before
- * deploying anything if the deploy would change the implementation (hardhat-deploy would deploy or reuse it and record
- * it, whether or not it can send the upgrade), or if the proxy does not run the recorded implementation.
- * `implementation` must be the same contract, args and salt the proxy deploy uses, so this asks the question
- * hardhat-deploy asks.
- */
-export async function assertNoUpgrade(
-    hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'ethers'>,
-    name: string,
-    deployer: string,
-    implementation: Omit<DeployOptions, 'from'>
-) {
-    const existing = await hre.deployments.getOrNull(name)
-    if (!existing) return
-    const recorded = existing.implementation?.toLowerCase()
-    const { differences, address } = await hre.deployments.fetchIfDifferent(`${name}_Implementation`, {
-        ...implementation,
-        from: deployer,
-    })
-    const running = await slotAddress(hre, existing.address, EIP1967_IMPLEMENTATION_SLOT)
-    if (!differences && (!address || address.toLowerCase() === recorded) && running.toLowerCase() === recorded) return
-    throw new Error(
-        `${name} is already deployed on "${hre.network.name}" (records ${existing.implementation}, runs ${running}) and ` +
-            `this deploy would change it; deploy/wxtm never upgrades. Upgrade wXTMBridge or wXTMController with ` +
-            `\`npx hardhat --network ${hre.network.name} upgrade-calldata:wxtm --contract ${name} --deploy-implementation\`; ` +
-            `wXTM is not upgraded from this repo.`
-    )
-}
-
 async function hasRole(
     hre: Pick<HardhatRuntimeEnvironment, 'ethers'>,
     contract: string,
     role: string,
     account: string
 ) {
-    // Not deployments.read: the recorded ABI may be the pre-upgrade one, without hasRole (wXTMBridge), and a
-    // pre-upgrade bridge reverts on hasRole, which counts as "no".
+    // Not deployments.read: the recorded ABI may be the pre-upgrade one, without hasRole (wXTMBridge). A reverting
+    // call (a pre-upgrade bridge has no hasRole) counts as "no"; any other error (e.g. the RPC) is rethrown.
     const accessControl = new ethers.utils.Interface(['function hasRole(bytes32, address) view returns (bool)'])
-    const result = await hre.ethers.provider
-        .call({ to: contract, data: accessControl.encodeFunctionData('hasRole', [role, account]) })
-        .catch(() => '0x')
-    return result !== '0x' && accessControl.decodeFunctionResult('hasRole', result)[0] === true
+    try {
+        const result = await hre.ethers.provider.call({
+            to: contract,
+            data: accessControl.encodeFunctionData('hasRole', [role, account]),
+        })
+        return result !== '0x' && accessControl.decodeFunctionResult('hasRole', result)[0] === true
+    } catch (e) {
+        if ((e as { code?: string }).code === 'CALL_EXCEPTION') return false
+        throw e
+    }
 }
 
 /**
@@ -117,7 +91,7 @@ export async function assertUpgraded(
     if (failed.length === 0) return
     throw new Error(
         `${name} ${deployment.address} on "${hre.network.name}" is not upgraded and set up: ${failed.join('; ')}. ` +
-            `Upgrade with \`npx hardhat --network ${hre.network.name} upgrade-calldata:wxtm --contract ${name}\`.`
+            `Upgrade with \`npx hardhat --network ${hre.network.name} upgrade-calldata:wxtm --contract ${name} --deploy-implementation\`.`
     )
 }
 

@@ -2,14 +2,7 @@ import assert from 'assert'
 
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import {
-    assertNoUpgrade,
-    assertUpgraded,
-    chainDeployments,
-    getAdmin,
-    getGuardian,
-    implementationOptions,
-} from '../../utils/admin'
+import { assertUpgraded, chainDeployments, getAdmin, getGuardian, implementationOptions } from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTMBridge'
@@ -28,6 +21,14 @@ const deploy: DeployFunction = async (hre) => {
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
     const guardian = await getGuardian(hre)
+    // Existing proxies are only checked: upgrades go through upgrade-calldata:wxtm, and deploy() would also deploy a
+    // stray ProxyAdmin for the current admin (its CREATE2 address need not match the proxy's real ProxyAdmin).
+    const existing = await deployments.getOrNull(contractName)
+    if (existing) {
+        await assertUpgraded(hre, contractName, existing, admin, guardian)
+        console.log(`${contractName} ${existing.address} runs ${existing.implementation} and is set up; nothing to do`)
+        return
+    }
     const deployedContracts = await chainDeployments(hre, contractName)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
@@ -37,7 +38,6 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Guardian: ${guardian}`)
 
     const implementation = implementationOptions(contractName)
-    await assertNoUpgrade(hre, contractName, deployer, implementation)
 
     const proxy = await deploy(contractName, {
         from: deployer,

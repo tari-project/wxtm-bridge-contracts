@@ -2,7 +2,7 @@ import { expect } from 'chai'
 import { ethers } from 'ethers'
 import { deployments } from 'hardhat'
 
-import { assertNoUpgrade, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
+import { assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -112,47 +112,6 @@ describe('admin from named config', function () {
         })
     })
 
-    describe('deploy scripts never upgrade', function () {
-        const DEPLOYER = '0x1111111111111111111111111111111111111111'
-        const IMPL = '0x2222222222222222222222222222222222222222'
-        const OTHER = '0x5555555555555555555555555555555555555555'
-        const options = { contract: 'wXTM', args: [], deterministicDeployment: '0x01' }
-        const PROXY = '0x3333333333333333333333333333333333333333'
-        const hreWith = (recorded: object | null, differences: boolean, address?: string, running = IMPL) =>
-            ({
-                network: { name: 'mainnet' },
-                deployments: {
-                    getOrNull: async () => recorded,
-                    fetchIfDifferent: async () => ({ differences, address }),
-                },
-                ethers: { provider: { getStorageAt: async () => ethers.utils.hexZeroPad(running, 32) } },
-            }) as never
-        const failure = (hre: never) =>
-            assertNoUpgrade(hre, 'wXTM', DEPLOYER, options).then(
-                () => undefined,
-                (e: Error) => e
-            )
-        const record = { address: PROXY, implementation: IMPL }
-
-        it('fails before deploying when the implementation changed', async function () {
-            const error = await failure(hreWith(record, true))
-            expect(error?.message).to.match(/wXTM is already deployed on "mainnet".*upgrade-calldata:wxtm/)
-        })
-
-        it('fails when the new implementation already sits at its CREATE2 address (half-done upgrade)', async function () {
-            expect((await failure(hreWith(record, false, OTHER)))?.message).to.match(/never upgrades/)
-        })
-
-        it('fails when the proxy does not run the recorded implementation', async function () {
-            expect((await failure(hreWith(record, false, IMPL, OTHER)))?.message).to.match(/runs 0x5555/)
-        })
-
-        it('allows a first deploy and an unchanged rerun', async function () {
-            expect(await failure(hreWith(null, true))).to.be.undefined
-            expect(await failure(hreWith(record, false, IMPL.toUpperCase().replace('0X', '0x')))).to.be.undefined
-        })
-    })
-
     describe('upgrade and setup on-chain', function () {
         const IMPL = '0x2222222222222222222222222222222222222222'
         const GUARDIAN = '0x4444444444444444444444444444444444444444'
@@ -184,6 +143,21 @@ describe('admin from named config', function () {
             expect((await failure(hreWith(IMPL, true, false)))?.message).to.match(
                 /admin 0xe178.* lacks DEFAULT_ADMIN_ROLE/
             )
+        })
+
+        it('counts a reverting hasRole as no role, and rethrows any other error', async function () {
+            const failing = (error: object) =>
+                ({
+                    network: { name: 'mainnet' },
+                    ethers: {
+                        provider: {
+                            getStorageAt: async () => ethers.utils.hexZeroPad(IMPL, 32),
+                            call: async () => Promise.reject(Object.assign(new Error('call failed'), error)),
+                        },
+                    },
+                }) as never
+            expect((await failure(failing({ code: 'CALL_EXCEPTION' })))?.message).to.match(/lacks PAUSER_ROLE/)
+            expect((await failure(failing({ code: 'SERVER_ERROR' })))?.message).to.equal('call failed')
         })
 
         it('passes when the proxy runs the implementation and admin and guardian hold their roles', async function () {

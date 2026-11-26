@@ -6,7 +6,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import { assertNoUpgrade, getAdmin } from '../../utils/admin'
+import { getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTM'
@@ -23,6 +23,13 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
     console.log(`Admin: ${admin}`)
+
+    // wXTM is never upgraded or changed from this repo: its source no longer matches the deployed implementation.
+    const existing = await deployments.getOrNull(contractName)
+    if (existing) {
+        console.log(`wXTM already deployed at ${existing.address}; not touched`)
+        return
+    }
 
     // This is an external deployment pulled in from @layerzerolabs/lz-evm-sdk-v2
     //
@@ -48,12 +55,6 @@ const deploy: DeployFunction = async (hre) => {
     console.log('Lz Address: ', address)
 
     const salt = ethers.utils.id('wXTM-v0.0.1')
-    await assertNoUpgrade(hre, contractName, deployer, {
-        contract: contractName,
-        args: [address],
-        deterministicDeployment: salt,
-    })
-
     const proxy = await deploy(contractName, {
         from: deployer,
         args: [address],
