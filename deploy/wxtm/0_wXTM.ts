@@ -6,7 +6,7 @@ import { type DeployFunction } from 'hardhat-deploy/types'
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import { getAdmin } from '../../utils/admin'
+import { assertNotListedElsewhere, getAdmin } from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTM'
@@ -30,6 +30,7 @@ const deploy: DeployFunction = async (hre) => {
         console.log(`wXTM already deployed at ${existing.address}; not touched`)
         return
     }
+    await assertNotListedElsewhere(hre, contractName)
 
     // This is an external deployment pulled in from @layerzerolabs/lz-evm-sdk-v2
     //
@@ -69,10 +70,6 @@ const deploy: DeployFunction = async (hre) => {
                 init: {
                     methodName: 'initialize',
                     args: ['WrappedXTM', 'wXTM', '1', admin],
-                },
-                onUpgrade: {
-                    methodName: 'initializeV1',
-                    args: ['WrappedXTM', 'wXTM', '2', admin],
                 },
             },
         },

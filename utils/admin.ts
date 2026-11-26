@@ -96,13 +96,12 @@ export async function assertUpgraded(
 }
 
 /**
- * The wXTM to wire `name` to: deployments/<network>/wXTM.json, else the package's deployments.json entry for this
- * chain; fails if both exist and differ. Also refuses a fresh deploy of `name` when the package already lists one
- * for the chain but deployments/<network> has no record of it (hardhat-deploy would create a second one).
+ * Refuses a fresh deploy of `name` when the package's deployments.json already lists one for this chain but
+ * deployments/<network> has no record of it (hardhat-deploy would create a second one).
  */
-export async function chainDeployments(
+export async function assertNotListedElsewhere(
     hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'getChainId'>,
-    name: 'wXTMBridge' | 'wXTMController'
+    name: 'wXTM' | 'wXTMBridge' | 'wXTMController'
 ) {
     const chainId = Number(await hre.getChainId())
     const listed = getDeployments(chainId)
@@ -113,6 +112,18 @@ export async function chainDeployments(
                 `or remove the listing to deploy a new ${name} and repoint its consumers.`
         )
     }
+    return { chainId, listed }
+}
+
+/**
+ * The wXTM to wire `name` to: deployments/<network>/wXTM.json, else the package's deployments.json entry for this
+ * chain; fails if both exist and differ. Also refuses a fresh deploy of `name` the package lists (see above).
+ */
+export async function chainDeployments(
+    hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'getChainId'>,
+    name: 'wXTMBridge' | 'wXTMController'
+) {
+    const { chainId, listed } = await assertNotListedElsewhere(hre, name)
     const local = (await hre.deployments.getOrNull('wXTM'))?.address
     if (local && listed.wXTM && local.toLowerCase() !== listed.wXTM.toLowerCase()) {
         throw new Error(

@@ -1,9 +1,11 @@
+import { SignerWithAddress } from '@nomiclabs/hardhat-ethers/signers'
 import { expect } from 'chai'
 import { ethers } from 'ethers'
 import hre, { artifacts, deployments } from 'hardhat'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
-import { upgradeCalldata, upgradeCalldataAction } from '../../tasks/wxtm'
+import { INITIALIZABLE_SLOT, SETUP_VERSION, upgradeCalldata, upgradeCalldataAction } from '../../tasks/wxtm'
+import { implementationOptions } from '../../utils/admin'
 
 const refusal = (promise: Promise<unknown>) =>
     promise.then(
@@ -37,54 +39,130 @@ describe('upgrade-calldata:wxtm', function () {
         })
     }
 
-    it('upgrades a proxy on the hardhat network: refusals, upgradeAndCall, --check records it', async function () {
-        await deployments.fixture(['none']) // empty in-memory deployments
-        const [deployer, admin, stranger] = await hre.ethers.getSigners()
-        const from = deployer.address
-        // Any contract stands in for the guardian Safe; wTARIBridge stands in for the old implementation.
-        const guardian = (await deployments.deploy('GuardianStandIn', { contract: 'wTARIBridge', from })).address
-        await deployments.deploy('wXTMBridge', {
-            contract: 'wTARIBridge',
-            from,
-            proxy: { proxyContract: 'OpenZeppelinTransparentProxy', owner: admin.address },
-        })
-        const before = await deployments.get('wXTMBridge')
+    describe('on the hardhat network', function () {
+        let from: string
+        let admin: SignerWithAddress
+        let stranger: SignerWithAddress
+        let guardian: string
 
-        const withAccounts = (configuredAdmin: string, configuredGuardian: string) =>
-            Object.assign(Object.create(hre), {
-                getNamedAccounts: async () => ({
-                    deployer: from,
-                    admin: configuredAdmin,
-                    guardian: configuredGuardian,
-                }),
-            }) as HardhatRuntimeEnvironment
+        beforeEach(async function () {
+            await deployments.fixture(['none']) // empty in-memory deployments
+            const [deployer, ...others] = await hre.ethers.getSigners()
+            ;[admin, stranger] = others
+            from = deployer.address
+            // Any contract stands in for the guardian Safe.
+            guardian = (await deployments.deploy('GuardianStandIn', { contract: 'wTARIBridge', from })).address
+        })
+
         const run = (
+            contract: 'wXTMBridge' | 'wXTMController',
             flags: { deployImplementation?: boolean; check?: boolean },
-            configuredAdmin = admin.address,
-            configuredGuardian = guardian
+            configured: { admin?: string; guardian?: string } = {}
         ) =>
             upgradeCalldataAction(
-                { contract: 'wXTMBridge', deployImplementation: false, check: false, ...flags },
-                withAccounts(configuredAdmin, configuredGuardian)
+                { contract, deployImplementation: false, check: false, ...flags },
+                Object.assign(Object.create(hre), {
+                    getNamedAccounts: async () => ({
+                        deployer: from,
+                        admin: configured.admin ?? admin.address,
+                        guardian: configured.guardian ?? guardian,
+                    }),
+                }) as HardhatRuntimeEnvironment
             )
+        const initializedVersion = async (proxy: string) =>
+            BigInt(await hre.ethers.provider.getStorageAt(proxy, INITIALIZABLE_SLOT)) % 2n ** 64n
+        const send = async (tx?: { to: string; data: string }) =>
+            (await admin.sendTransaction({ to: tx?.to, data: tx?.data })).wait()
 
-        expect(await refusal(run({}, stranger.address))).to.match(/owned by 0x.*, not the configured admin/)
-        expect(await refusal(run({}))).to.match(/is not the compiled wXTMBridge: pass --deploy-implementation/)
+        it('wXTMBridge: refusals, upgradeAndCall, --check records it, a set-up proxy is refused', async function () {
+            // wTARIBridge stands in for the old implementation.
+            await deployments.deploy('wXTMBridge', {
+                contract: 'wTARIBridge',
+                from,
+                proxy: { proxyContract: 'OpenZeppelinTransparentProxy', owner: admin.address },
+            })
+            const before = await deployments.get('wXTMBridge')
+            const recordedBefore = (await deployments.get('wXTMBridge_Implementation')).address
 
-        const tx = await run({ deployImplementation: true })
-        expect(await refusal(run({ check: true }))).to.match(/not upgraded and set up/)
+            expect(await refusal(run('wXTMBridge', {}, { admin: stranger.address }))).to.match(
+                /owned by 0x.*, not the configured admin/
+            )
+            expect(await refusal(run('wXTMBridge', {}))).to.match(/is not the compiled wXTMBridge/)
 
-        await (await admin.sendTransaction({ to: tx?.to, data: tx?.data })).wait()
-        expect(await refusal(run({}))).to.match(/already runs 0x.* and is set up/)
-        // Set up already, but with another guardian than configured: name the failed check, print nothing.
-        const otherGuardian = (await deployments.deploy('OtherGuardian', { contract: 'wTARIBridge', from })).address
-        expect(await refusal(run({}, admin.address, otherGuardian))).to.match(/guardian 0x.* lacks PAUSER_ROLE/)
-        await run({ check: true })
+            const tx = await run('wXTMBridge', { deployImplementation: true })
+            // Not recorded until the proxy runs it.
+            expect((await deployments.get('wXTMBridge_Implementation')).address).to.equal(recordedBefore)
+            expect(await refusal(run('wXTMBridge', { check: true }))).to.match(/not upgraded and set up/)
 
-        const after = await deployments.get('wXTMBridge')
-        const implementation = (await deployments.get('wXTMBridge_Implementation')).address
-        expect(after.implementation).to.equal(implementation).and.not.equal(before.implementation)
-        expect(after.abi.map((fragment) => fragment.name)).to.include.members(['initializeV2', 'pause', 'PAUSER_ROLE'])
-        expect([after.address, after.args, after.receipt]).to.deep.equal([before.address, before.args, before.receipt])
+            await send(tx)
+            expect(await initializedVersion(before.address)).to.equal(SETUP_VERSION.wXTMBridge)
+            expect(await refusal(run('wXTMBridge', {}))).to.match(/already runs 0x.* and is set up/)
+            // Set up already, but with another guardian than configured: name the failed check, print nothing.
+            const otherGuardian = (await deployments.deploy('OtherGuardian', { contract: 'wTARIBridge', from })).address
+            expect(await refusal(run('wXTMBridge', {}, { guardian: otherGuardian }))).to.match(
+                /guardian 0x.* lacks PAUSER_ROLE/
+            )
+            await run('wXTMBridge', { check: true })
+
+            const after = await deployments.get('wXTMBridge')
+            const implementation = (await deployments.get('wXTMBridge_Implementation')).address
+            expect(after.implementation).to.equal(implementation).and.not.equal(before.implementation)
+            expect(after.abi.map((fragment) => fragment.name)).to.include.members([
+                'initializeV2',
+                'pause',
+                'PAUSER_ROLE',
+            ])
+            expect([after.address, after.args, after.receipt]).to.deep.equal([
+                before.address,
+                before.args,
+                before.receipt,
+            ])
+
+            // A set-up proxy running another implementation (as after a source change) is refused before anything
+            // is deployed.
+            const other = (await deployments.deploy('OtherBridgeImplementation', { contract: 'wXTMBridge', from }))
+                .address
+            await deployments.execute('DefaultProxyAdmin', { from: admin.address }, 'upgrade', before.address, other)
+            const nonce = await hre.ethers.provider.getTransactionCount(from)
+            expect(await refusal(run('wXTMBridge', { deployImplementation: true }))).to.match(
+                /already runs 0x.* and is set up/
+            )
+            expect(await hre.ethers.provider.getTransactionCount(from)).to.equal(nonce)
+        })
+
+        it('wXTMController: a plain upgrade() without setup is finished by upgradeAndCall', async function () {
+            // wTARIController, initialized with the admin, stands in for the old controller.
+            const proxy = (
+                await deployments.deploy('wXTMController', {
+                    contract: 'wTARIController',
+                    from,
+                    proxy: {
+                        proxyContract: 'OpenZeppelinTransparentProxy',
+                        owner: admin.address,
+                        execute: { init: { methodName: 'initialize', args: [guardian, from, from, admin.address, 0] } },
+                    },
+                })
+            ).address
+
+            await run('wXTMController', { deployImplementation: true })
+            const implementation = (
+                await deployments.deterministic('wXTMController_Implementation', {
+                    ...implementationOptions('wXTMController'),
+                    salt: implementationOptions('wXTMController').deterministicDeployment,
+                    from,
+                })
+            ).address
+            await deployments.execute('DefaultProxyAdmin', { from: admin.address }, 'upgrade', proxy, implementation)
+
+            const tx = await run('wXTMController', {})
+            const [, target] = new ethers.utils.Interface([
+                'function upgradeAndCall(address proxy, address implementation, bytes data)',
+            ]).decodeFunctionData('upgradeAndCall', tx?.data ?? '0x')
+            expect(target).to.equal(implementation)
+            await send(tx)
+            expect(await initializedVersion(proxy)).to.equal(SETUP_VERSION.wXTMController)
+            await run('wXTMController', { check: true })
+            expect((await deployments.get('wXTMController')).implementation).to.equal(implementation)
+        })
     })
 })

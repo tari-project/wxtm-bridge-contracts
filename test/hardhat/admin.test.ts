@@ -2,7 +2,7 @@ import { expect } from 'chai'
 import { ethers } from 'ethers'
 import { deployments } from 'hardhat'
 
-import { assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
+import { assertNotListedElsewhere, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -77,15 +77,22 @@ describe('admin from named config', function () {
                     getOrNull: async (name: string) => (records[name] ? { address: records[name] } : null),
                 },
             }) as never
-        const failure = (hre: never, name: 'wXTMBridge' | 'wXTMController') =>
-            chainDeployments(hre, name).then(
+        const refusalOf = (promise: Promise<unknown>) =>
+            promise.then(
                 () => undefined,
                 (e: Error) => e
             )
+        const failure = (hre: never, name: 'wXTMBridge' | 'wXTMController') => refusalOf(chainDeployments(hre, name))
 
         it('refuses a fresh deploy over a contract the package lists for the chain', async function () {
             const error = await failure(hreWith('84532', {}), 'wXTMBridge')
             expect(error?.message).to.match(/wXTMBridge for chain 84532 is listed at 0x5261.*Import that record/)
+        })
+
+        it('refuses a fresh wXTM deploy on a chain the package lists it for', async function () {
+            const error = await refusalOf(assertNotListedElsewhere(hreWith('11155111', {}), 'wXTM'))
+            expect(error?.message).to.match(/wXTM for chain 11155111 is listed at 0xcBe7.*Import that record/)
+            expect(await refusalOf(assertNotListedElsewhere(hreWith('31337', {}), 'wXTM'))).to.be.undefined
         })
 
         it("uses the chain's own wXTM when the contract has a local record", async function () {

@@ -12,6 +12,7 @@ import {
     implementationOptions,
     slotAddress,
 } from '../utils/admin'
+import verify from '../utils/verify'
 
 type Name = 'wXTMBridge' | 'wXTMController'
 
@@ -32,8 +33,8 @@ type Args = { contract: string; deployImplementation: boolean; check: boolean }
 
 // OpenZeppelin v5 Initializable's ERC-7201 slot (uint64 _initialized in the low bytes), and the reinitializer version
 // initializeV2 sets.
-const INITIALIZABLE_SLOT = '0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00'
-const SETUP_VERSION: { [name in Name]: bigint } = { wXTMBridge: 102n, wXTMController: 12n }
+export const INITIALIZABLE_SLOT = '0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00'
+export const SETUP_VERSION: { [name in Name]: bigint } = { wXTMBridge: 102n, wXTMController: 12n }
 
 /**
  * The upgrade-calldata:wxtm action; returns the transaction it prints (print mode). Exported so a test can run it
@@ -59,6 +60,16 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
                 `transfer its ownership to the admin or fix namedAccounts.admin before signing anything.`
         )
     }
+    const running = await slotAddress(hre, proxy.address, EIP1967_IMPLEMENTATION_SLOT)
+    if (!args.check) {
+        // Once initializeV2 has run, another upgradeAndCall with it is certain to revert, whatever the proxy runs:
+        // refuse before deploying anything, naming the failed checks if any.
+        const slot = await hre.ethers.provider.getStorageAt(proxy.address, INITIALIZABLE_SLOT)
+        if (BigInt(slot) % 2n ** 64n >= SETUP_VERSION[name]) {
+            await assertUpgraded(hre, name, { address: proxy.address, implementation: running }, admin, guardian)
+            throw new Error(`${name} ${proxy.address} already runs ${running} and is set up`)
+        }
+    }
     // Always the CREATE2 implementation deploy/wxtm would use, so the records match what the scripts compute.
     const { deployer } = await hre.getNamedAccounts()
     const { deterministicDeployment: salt, ...options } = implementationOptions(name)
@@ -69,7 +80,14 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
         log: true,
         waitConfirmations: hre.network.live ? 5 : 1,
     })
-    if (args.deployImplementation) await create2.deploy()
+    if (args.deployImplementation) {
+        // deploy() records it as <name>_Implementation; only --check may, once the proxy runs it.
+        const previous = await hre.deployments.getOrNull(`${name}_Implementation`)
+        await create2.deploy()
+        if (previous) await hre.deployments.save(`${name}_Implementation`, previous)
+        else await hre.deployments.delete(`${name}_Implementation`)
+        await verify(hre, create2.address, [])
+    }
     const implementation = create2.address
     const recorded = (await hre.deployments.get(`${name}_Implementation`)).address
     const artifact = await hre.deployments.getExtendedArtifact(name)
@@ -93,15 +111,6 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
         return
     }
 
-    const running = await slotAddress(hre, proxy.address, EIP1967_IMPLEMENTATION_SLOT)
-    if (running.toLowerCase() === implementation.toLowerCase()) {
-        // Once initializeV2 has run, another upgradeAndCall with it is certain to revert: report what is wrong instead.
-        const slot = await hre.ethers.provider.getStorageAt(proxy.address, INITIALIZABLE_SLOT)
-        if (BigInt(slot) % 2n ** 64n >= SETUP_VERSION[name]) {
-            await assertUpgraded(hre, name, { address: proxy.address, implementation }, admin, guardian)
-            throw new Error(`${name} ${proxy.address} already runs ${implementation} and is set up`)
-        }
-    }
     // The proxy may already run it after a plain upgrade() without the setup: upgradeAndCall finishes that.
     const { setup, data } = upgradeCalldata(name, proxy.address, implementation, admin, guardian)
     console.log(`${name} ${proxy.address} runs ${running}`)
