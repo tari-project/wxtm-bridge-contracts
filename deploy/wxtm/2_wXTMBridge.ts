@@ -3,7 +3,7 @@ import assert from 'assert'
 import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertDeployerCanUpgrade, getAdmin, getGuardian } from '../../utils/admin'
+import { assertDeployerCanUpgrade, assertUpgraded, getAdmin, getGuardian } from '../../utils/admin'
 import verify from '../../utils/verify'
 import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
@@ -61,6 +61,7 @@ const deploy: DeployFunction = async (hre) => {
             },
         },
     })
+    await assertUpgraded(hre, contractName, proxy, guardian)
 
     console.log(
         `wXTMBridge contract deployed to network: ${hre.network.name}, address: ${proxy.address}, wXTM: ${deployedContracts.wXTM}, implementation: ${proxy.implementation}`

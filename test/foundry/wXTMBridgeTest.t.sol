@@ -8,6 +8,8 @@ import { wXTMController } from "../../contracts/wXTMController.sol";
 import { console } from "forge-std/Test.sol";
 import { TestHelperOz5 } from "@layerzerolabs/test-devtools-evm-foundry/contracts/TestHelperOz5.sol";
 import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import { ProxyAdmin } from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
+import { ITransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -18,6 +20,7 @@ contract wXTMBridgeTest is TestHelperOz5 {
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     // OpenZeppelin Initializable's ERC-7201 slot; its low 8 bytes hold the initialized version.
+    bytes32 private constant ERC1967_ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
     bytes32 private constant INITIALIZABLE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
 
     // Dual Tari address (91 characters).
@@ -348,22 +351,54 @@ contract wXTMBridgeTest is TestHelperOz5 {
         assertFalse(bridge.paused());
     }
 
-    function test_initialize_rejected_on_live_proxy_upgraded_without_setup() public {
+    function test_setup_rejected_on_live_proxy_upgraded_without_setup() public {
         // A live proxy initialized at version 1 by the old `initializer`, upgraded without a setup call.
-        wXTMBridge live = wXTMBridge(address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, "")));
+        address implementation = address(new wXTMBridge());
+        wXTMBridge live = wXTMBridge(address(new TransparentUpgradeableProxy(implementation, multiSig, "")));
         vm.store(address(live), INITIALIZABLE_SLOT, bytes32(uint256(1)));
 
-        vm.prank(user);
+        vm.startPrank(user);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         live.initialize(address(wxtm), user, user);
+        vm.expectRevert(wXTMBridge.NotProxyAdmin.selector);
+        live.initializeV2(user, user);
+        vm.stopPrank();
+
+        // The admin finishes with upgradeAndCall to the same implementation.
+        vm.prank(multiSig);
+        _proxyAdmin(address(live)).upgradeAndCall(
+            ITransparentUpgradeableProxy(address(live)),
+            implementation,
+            abi.encodeCall(wXTMBridge.initializeV2, (multiSig, guardian))
+        );
+        assertTrue(live.hasRole(bytes32(0), multiSig));
+        assertTrue(live.hasRole(PAUSER_ROLE, guardian));
     }
 
     function test_initializers_run_once() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bridge.initialize(address(wxtm), user, user);
+
+        vm.expectRevert(wXTMBridge.NotProxyAdmin.selector);
         bridge.initializeV2(user, user);
 
+        address implementation = address(new wXTMBridge());
+        bytes memory setup = abi.encodeCall(wXTMBridge.initializeV2, (user, user));
+        ProxyAdmin proxyAdmin = _proxyAdmin(address(bridge));
+        vm.prank(multiSig);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        bridge.initialize(address(wxtm), user, user);
+        proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(bridge)), implementation, setup);
+    }
+
+    function test_rejects_zero_admin_or_guardian() public {
+        address[2][2] memory pairs = [[address(0), guardian], [multiSig, address(0)]];
+        for (uint256 i = 0; i < pairs.length; i++) {
+            wXTMBridge fresh = wXTMBridge(
+                address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, ""))
+            );
+            vm.expectRevert(wXTMBridge.ZeroAddress.selector);
+            fresh.initialize(address(wxtm), pairs[i][0], pairs[i][1]);
+        }
     }
 
     function _signAuthorization(uint256 value, bytes32 authNonce) internal view returns (uint8, bytes32, bytes32) {
@@ -394,6 +429,10 @@ contract wXTMBridgeTest is TestHelperOz5 {
         for (uint256 i = 0; i < index; i++) head[i] = b[i];
         for (uint256 i = 0; i < tail.length; i++) tail[i] = b[index + 1 + i];
         return string.concat(string(head), insert, string(tail));
+    }
+
+    function _proxyAdmin(address proxy) internal view returns (ProxyAdmin) {
+        return ProxyAdmin(address(uint160(uint256(vm.load(proxy, ERC1967_ADMIN_SLOT)))));
     }
 
     function _getDigest(

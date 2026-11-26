@@ -4,6 +4,8 @@ pragma solidity ^0.8.22;
 // Contract imports
 import { wXTM } from "../../contracts/wXTM.sol";
 import { wXTMController } from "../../contracts/wXTMController.sol";
+import { ProxyAdmin } from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
+import { ITransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -19,6 +21,7 @@ contract wXTMControllerTest is TestHelperOz5 {
     bytes32 private constant HIGH_MINTER_ROLE = keccak256("HIGH_MINTER_ROLE");
     bytes32 private constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     // OpenZeppelin Initializable's ERC-7201 slot; its low 8 bytes hold the initialized version.
+    bytes32 private constant ERC1967_ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
     bytes32 private constant INITIALIZABLE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
 
     uint32 private aEid = 1;
@@ -195,24 +198,57 @@ contract wXTMControllerTest is TestHelperOz5 {
         assertFalse(controller.paused());
     }
 
-    function test_initialize_rejected_on_live_proxy_upgraded_without_setup() public {
+    function test_setup_rejected_on_live_proxy_upgraded_without_setup() public {
         // A live proxy initialized at version 1 by the old `initializer`, upgraded without a setup call.
-        wXTMController live = wXTMController(
-            address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
-        );
+        address implementation = address(new wXTMController());
+        wXTMController live = wXTMController(address(new TransparentUpgradeableProxy(implementation, admin, "")));
         vm.store(address(live), INITIALIZABLE_SLOT, bytes32(uint256(1)));
 
-        vm.prank(user);
+        vm.startPrank(user);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         live.initialize(address(wxtm), user, user, user, user);
+        vm.expectRevert(wXTMController.NotProxyAdmin.selector);
+        live.initializeV2(user);
+        vm.stopPrank();
+
+        // The admin finishes with upgradeAndCall to the same implementation.
+        vm.prank(admin);
+        _proxyAdmin(address(live)).upgradeAndCall(
+            ITransparentUpgradeableProxy(address(live)),
+            implementation,
+            abi.encodeCall(wXTMController.initializeV2, (guardian))
+        );
+        assertTrue(live.hasRole(PAUSER_ROLE, guardian));
     }
 
     function test_initializers_run_once() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initialize(address(wxtm), user, user, user, user);
+
+        vm.expectRevert(wXTMController.NotProxyAdmin.selector);
         controller.initializeV2(user);
 
+        address implementation = address(new wXTMController());
+        bytes memory setup = abi.encodeCall(wXTMController.initializeV2, (user));
+        ProxyAdmin proxyAdmin = _proxyAdmin(address(controller));
+        vm.prank(admin);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        controller.initialize(address(wxtm), user, user, user, user);
+        proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(controller)), implementation, setup);
+    }
+
+    function test_rejects_zero_admin_or_guardian() public {
+        address[2][2] memory pairs = [[address(0), guardian], [admin, address(0)]];
+        for (uint256 i = 0; i < pairs.length; i++) {
+            wXTMController fresh = wXTMController(
+                address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
+            );
+            vm.expectRevert(wXTMController.ZeroAddress.selector);
+            fresh.initialize(address(wxtm), lowMinter, highMinter, pairs[i][0], pairs[i][1]);
+        }
+    }
+
+    function _proxyAdmin(address proxy) internal view returns (ProxyAdmin) {
+        return ProxyAdmin(address(uint160(uint256(vm.load(proxy, ERC1967_ADMIN_SLOT)))));
     }
 
     /** @dev It can be taken from OFTTest -> import { OFTTest } from "@layerzerolabs/oft-evm-upgradeable/test/OFT.t.sol"; */

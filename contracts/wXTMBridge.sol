@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
+import { ERC1967Utils } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -14,6 +15,8 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
     error InsufficientAmount();
     error InvalidAmountPrecision();
     error InvalidTargetTariAddress();
+    error NotProxyAdmin();
+    error ZeroAddress();
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -46,6 +49,14 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
         _;
     }
 
+    /// @dev The upgrade setup can only come from the proxy's ProxyAdmin, i.e. through ProxyAdmin.upgradeAndCall.
+    /// After a plain upgrade() nobody else can call it; the admin finishes with upgradeAndCall to the same
+    /// implementation.
+    modifier onlyProxyAdmin() {
+        if (msg.sender != ERC1967Utils.getAdmin()) revert NotProxyAdmin();
+        _;
+    }
+
     /// @notice Initializer for a new proxy. Shares ACCESS_VERSION with initializeV2, so only one of them can ever run.
     function initialize(
         address _wXTM,
@@ -56,8 +67,8 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
         _initializeAccess(admin, guardian);
     }
 
-    /// @notice Upgrade of an existing proxy; must be called atomically through ProxyAdmin.upgradeAndCall.
-    function initializeV2(address admin, address guardian) external reinitializer(ACCESS_VERSION) {
+    /// @notice Upgrade of an existing proxy, through ProxyAdmin.upgradeAndCall.
+    function initializeV2(address admin, address guardian) external onlyProxyAdmin reinitializer(ACCESS_VERSION) {
         _initializeAccess(admin, guardian);
     }
 
@@ -115,6 +126,7 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
     }
 
     function _initializeAccess(address admin, address guardian) private {
+        if (admin == address(0) || guardian == address(0)) revert ZeroAddress();
         __AccessControl_init();
         __Pausable_init();
 

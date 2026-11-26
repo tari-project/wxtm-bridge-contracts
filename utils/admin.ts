@@ -32,21 +32,30 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
     return guardian
 }
 
+const EIP1967_IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'
+const EIP1967_ADMIN_SLOT = '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
+
+async function slotAddress(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string, slot: string) {
+    return ethers.utils.getAddress(ethers.utils.hexDataSlice(await hre.ethers.provider.getStorageAt(address, slot), 12))
+}
+
 /**
- * Fails before deploying when `name` already exists, the deployer is not the admin, and the deploy would upgrade it:
- * the implementation differs from the deployed one. hardhat-deploy would deploy the new implementation from the
- * deployer, then fail to send the upgrade from the admin; a rerun then records the new implementation in
- * deployments/ although the proxy was never upgraded (catchUnknownSigner does not prevent that). `implementation`
- * must be the same contract, args and salt the proxy deploy uses, so this asks the question hardhat-deploy asks.
+ * Fails before deploying when `name` already exists and the deploy would upgrade it (the implementation differs from
+ * the deployed one), but hardhat-deploy cannot send that upgrade:
+ * - the deployer is not the admin: hardhat-deploy would deploy the new implementation from the deployer, then fail
+ *   to send the upgrade from the admin; a rerun then records the new implementation in deployments/ although the
+ *   proxy was never upgraded (catchUnknownSigner does not prevent that);
+ * - the proxy's EIP-1967 admin is not DefaultProxyAdmin: hardhat-deploy deploys the implementation, then throws.
+ * `implementation` must be the same contract, args and salt the proxy deploy uses, so this asks the question
+ * hardhat-deploy asks.
  */
 export async function assertDeployerCanUpgrade(
-    hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network'>,
+    hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'ethers'>,
     name: string,
     deployer: string,
     admin: string,
     implementation: Omit<DeployOptions, 'from'>
 ) {
-    if (deployer.toLowerCase() === admin.toLowerCase()) return
     const existing = await hre.deployments.getOrNull(name)
     if (!existing) return
     const { differences, address } = await hre.deployments.fetchIfDifferent(`${name}_Implementation`, {
@@ -55,11 +64,46 @@ export async function assertDeployerCanUpgrade(
     })
     const sameImplementation = !address || address.toLowerCase() === existing.implementation?.toLowerCase()
     if (!differences && sameImplementation) return
+    const manualUpgrade =
+        `deploy the implementation and have the owner of the proxy's ProxyAdmin (EIP-1967 admin slot) call ` +
+        `upgradeAndCall with the script's onUpgrade calldata (initializeV2 for wXTMBridge and wXTMController). ` +
+        `Never upgrade() followed by a separate call: initializeV2 only accepts the ProxyAdmin as caller, so the ` +
+        `setup would still need upgradeAndCall to the same implementation.`
+    if (deployer.toLowerCase() !== admin.toLowerCase()) {
+        throw new Error(
+            `${name} is already deployed on "${hre.network.name}" and its admin is ${admin}, not the deployer ${deployer}. ` +
+                `Upgrading from here would deploy the implementation but not upgrade the proxy, and record an upgrade ` +
+                `that never happened. Run the deploy as the admin, or ${manualUpgrade}`
+        )
+    }
+    const proxyAdmin = await slotAddress(hre, existing.address, EIP1967_ADMIN_SLOT)
+    const defaultProxyAdmin = await hre.deployments.getOrNull('DefaultProxyAdmin')
+    if (proxyAdmin.toLowerCase() !== defaultProxyAdmin?.address.toLowerCase()) {
+        throw new Error(
+            `${name} on "${hre.network.name}" is administered by ${proxyAdmin}, not DefaultProxyAdmin ` +
+                `${defaultProxyAdmin?.address}, so hardhat-deploy cannot upgrade it. Instead, ${manualUpgrade}`
+        )
+    }
+}
+
+/**
+ * Fails after a deploy when the proxy does not run the implementation hardhat-deploy recorded, or the guardian lacks
+ * PAUSER_ROLE: hardhat-deploy saves a new implementation without sending any upgrade when it was already deployed
+ * (a rerun, or the CREATE2 address already has code).
+ */
+export async function assertUpgraded(
+    hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'ethers'>,
+    name: string,
+    deployment: { address: string; implementation?: string },
+    guardian: string
+) {
+    const running = await slotAddress(hre, deployment.address, EIP1967_IMPLEMENTATION_SLOT)
+    const guardianCanPause = await hre.deployments.read(name, 'hasRole', ethers.utils.id('PAUSER_ROLE'), guardian)
+    if (running.toLowerCase() === deployment.implementation?.toLowerCase() && guardianCanPause) return
     throw new Error(
-        `${name} is already deployed on "${hre.network.name}" and its admin is ${admin}, not the deployer ${deployer}. ` +
-            `Upgrading from here would deploy the implementation but not upgrade the proxy, and record an upgrade ` +
-            `that never happened. Run the deploy as the admin, or deploy the implementation and have the admin upgrade ` +
-            `with ProxyAdmin.upgradeAndCall and the script's onUpgrade calldata (initializeV2 for wXTMBridge and ` +
-            `wXTMController), never upgrade() followed by a separate call: anyone could call the initializer in between.`
+        `${name} on "${hre.network.name}" runs ${running}, recorded ${deployment.implementation}; guardian ${guardian} ` +
+            `has PAUSER_ROLE: ${guardianCanPause}. deployments/${hre.network.name}/${name}.json records an upgrade ` +
+            `that did not happen: have the owner of the proxy's ProxyAdmin (EIP-1967 admin slot) call upgradeAndCall ` +
+            `with the implementation and the initializeV2 calldata.`
     )
 }

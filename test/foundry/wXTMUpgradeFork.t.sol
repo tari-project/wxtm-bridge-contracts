@@ -12,6 +12,8 @@ import { wXTMController } from "../../contracts/wXTMController.sol";
 
 interface IProxyAdmin {
     function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable;
+
+    function upgrade(address proxy, address implementation) external;
 }
 
 /// @dev Upgrades the mainnet wXTMBridge and wXTMController proxies on a fork of MAINNET_RPC_URL (the variable
@@ -39,6 +41,7 @@ contract wXTMUpgradeForkTest is Test {
     address private user = makeAddr("user");
 
     uint256 private nonceBefore;
+    uint256 private beforeUpgrade;
 
     function setUp() public {
         string memory rpc = vm.envOr("MAINNET_RPC_URL", string(""));
@@ -54,6 +57,7 @@ contract wXTMUpgradeForkTest is Test {
         assertEq(_wxtmOf(BRIDGE), WXTM);
         _assertControllerRolesUnchanged();
 
+        beforeUpgrade = vm.snapshotState();
         _upgrade(BRIDGE, address(new wXTMBridge()), abi.encodeCall(wXTMBridge.initializeV2, (ADMIN, guardian)));
         _upgrade(CONTROLLER, address(new wXTMController()), abi.encodeCall(wXTMController.initializeV2, (guardian)));
     }
@@ -74,11 +78,11 @@ contract wXTMUpgradeForkTest is Test {
         vm.startPrank(user);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         bridge.initialize(user, user, user);
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        vm.expectRevert(wXTMBridge.NotProxyAdmin.selector);
         bridge.initializeV2(user, user);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         controller.initialize(WXTM, user, user, user, user);
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        vm.expectRevert(wXTMController.NotProxyAdmin.selector);
         controller.initializeV2(user);
         vm.stopPrank();
     }
@@ -150,10 +154,43 @@ contract wXTMUpgradeForkTest is Test {
         }
     }
 
+    function test_plain_upgrade_leaves_setup_to_the_proxy_admin() public {
+        vm.revertToState(beforeUpgrade);
+        address bridgeImplementation = address(new wXTMBridge());
+        address controllerImplementation = address(new wXTMController());
+
+        vm.startPrank(ADMIN);
+        IProxyAdmin(_proxyAdminOf(BRIDGE)).upgrade(BRIDGE, bridgeImplementation);
+        IProxyAdmin(_proxyAdminOf(CONTROLLER)).upgrade(CONTROLLER, controllerImplementation);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bridge.initialize(user, user, user);
+        vm.expectRevert(wXTMBridge.NotProxyAdmin.selector);
+        bridge.initializeV2(user, user);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        controller.initialize(WXTM, user, user, user, user);
+        vm.expectRevert(wXTMController.NotProxyAdmin.selector);
+        controller.initializeV2(user);
+        vm.stopPrank();
+
+        // Recovery: upgradeAndCall to the same implementation runs the setup.
+        _upgrade(BRIDGE, bridgeImplementation, abi.encodeCall(wXTMBridge.initializeV2, (ADMIN, guardian)));
+        _upgrade(CONTROLLER, controllerImplementation, abi.encodeCall(wXTMController.initializeV2, (guardian)));
+        assertTrue(bridge.hasRole(bytes32(0), ADMIN));
+        assertTrue(bridge.hasRole(PAUSER_ROLE, guardian));
+        assertTrue(controller.hasRole(PAUSER_ROLE, guardian));
+        assertEq(uint256(vm.load(BRIDGE, bytes32(uint256(0)))), nonceBefore);
+    }
+
+    function _proxyAdminOf(address proxy) private view returns (address) {
+        return address(uint160(uint256(vm.load(proxy, EIP1967_ADMIN_SLOT))));
+    }
+
     function _upgrade(address proxy, address implementation, bytes memory data) private {
-        address proxyAdmin = address(uint160(uint256(vm.load(proxy, EIP1967_ADMIN_SLOT))));
         vm.prank(ADMIN);
-        IProxyAdmin(proxyAdmin).upgradeAndCall(proxy, implementation, data);
+        IProxyAdmin(_proxyAdminOf(proxy)).upgradeAndCall(proxy, implementation, data);
     }
 
     function _wxtmOf(address proxy) private view returns (address) {
