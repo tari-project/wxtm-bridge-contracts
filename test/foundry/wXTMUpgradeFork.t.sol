@@ -50,6 +50,7 @@ contract wXTMUpgradeForkTest is Test {
             return;
         }
         vm.createSelectFork(rpc);
+        vm.etch(guardian, hex"00"); // stands in for the guardian Safe: the contracts require code there
 
         // Bridge storage: slot 0 nonce, slot 1 wXTM.
         nonceBefore = uint256(vm.load(BRIDGE, bytes32(uint256(0))));
@@ -174,6 +175,14 @@ contract wXTMUpgradeForkTest is Test {
         vm.expectRevert(wXTMController.NotProxyAdmin.selector);
         controller.initializeV2(user);
         vm.stopPrank();
+
+        // The setup refuses an EOA guardian.
+        address eoa = makeAddr("sec18-eoa-guardian");
+        assertEq(eoa.code.length, 0);
+        vm.expectRevert(wXTMBridge.InvalidGuardian.selector);
+        _upgrade(BRIDGE, bridgeImplementation, abi.encodeCall(wXTMBridge.initializeV2, (ADMIN, eoa)));
+        vm.expectRevert(wXTMController.InvalidGuardian.selector);
+        _upgrade(CONTROLLER, controllerImplementation, abi.encodeCall(wXTMController.initializeV2, (eoa)));
 
         // Recovery: upgradeAndCall to the same implementation runs the setup.
         _upgrade(BRIDGE, bridgeImplementation, abi.encodeCall(wXTMBridge.initializeV2, (ADMIN, guardian)));

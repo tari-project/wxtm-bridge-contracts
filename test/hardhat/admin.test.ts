@@ -2,7 +2,7 @@ import { expect } from 'chai'
 import { ethers } from 'ethers'
 import { deployments } from 'hardhat'
 
-import { assertDeployerCanUpgrade, assertUpgraded, getAdmin, getGuardian } from '../../utils/admin'
+import { assertDeployerCanUpgrade, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -10,8 +10,12 @@ function hreWithAdmin(admin?: string) {
     return { network: { name: 'mainnet' }, getNamedAccounts: async () => (admin ? { admin } : {}) } as never
 }
 
-function hreWithGuardian(guardian?: string) {
-    return { network: { name: 'mainnet' }, getNamedAccounts: async () => (guardian ? { guardian } : {}) } as never
+function hreWithGuardian(guardian?: string, code = '0x6080', deployer = '0x1111111111111111111111111111111111111111') {
+    return {
+        network: { name: 'mainnet' },
+        getNamedAccounts: async () => ({ guardian, admin: ADMIN, deployer }),
+        ethers: { provider: { getCode: async () => code } },
+    } as never
 }
 
 describe('admin from named config', function () {
@@ -47,6 +51,46 @@ describe('admin from named config', function () {
     it('returns the configured guardian', async function () {
         const guardian = '0x3333333333333333333333333333333333333333'
         expect(await getGuardian(hreWithGuardian(guardian))).to.equal(guardian)
+    })
+
+    it('rejects a guardian that is not a contract (or is a delegated EOA), or is the admin or the deployer', async function () {
+        const guardian = '0x3333333333333333333333333333333333333333'
+        for (const hre of [
+            hreWithGuardian(guardian, '0x'),
+            hreWithGuardian(guardian, '0xef01007a664368c486cd924caf5ba9bd56b2e9f19dd72b'),
+            hreWithGuardian(ADMIN.toLowerCase()),
+            hreWithGuardian(guardian, '0x6080', guardian),
+        ]) {
+            let error: Error | undefined
+            await getGuardian(hre).catch((e: Error) => (error = e))
+            expect(error?.message).to.match(/must be a Safe, not the admin or the deployer/)
+        }
+    })
+
+    describe('package deployments for the chain', function () {
+        const hreWith = (chainId: string, recorded: object | null) =>
+            ({
+                network: { name: 'some-network' },
+                getChainId: async () => chainId,
+                deployments: { getOrNull: async () => recorded },
+            }) as never
+
+        it('refuses a fresh deploy over a contract the package lists for the chain', async function () {
+            let error: Error | undefined
+            await chainDeployments(hreWith('84532', null), 'wXTMBridge').catch((e: Error) => (error = e))
+            expect(error?.message).to.match(/wXTMBridge for chain 84532 is listed at 0x5261.*Import that record/)
+        })
+
+        it("returns the chain's own wXTM when the contract has a local record", async function () {
+            const listed = await chainDeployments(hreWith('11155111', { address: '0x01' }), 'wXTMBridge')
+            expect(listed.wXTM).to.equal('0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374')
+        })
+
+        it('refuses a chain without wXTM', async function () {
+            let error: Error | undefined
+            await chainDeployments(hreWith('8453', null), 'wXTMController').catch((e: Error) => (error = e))
+            expect(error?.message).to.match(/No wXTM for chain 8453/)
+        })
     })
 
     describe('upgrade that hardhat-deploy cannot complete', function () {
@@ -117,8 +161,12 @@ describe('admin from named config', function () {
         const hreWith = (running: string, guardianCanPause: boolean) =>
             ({
                 network: { name: 'mainnet' },
-                deployments: { read: async () => guardianCanPause },
-                ethers: { provider: { getStorageAt: async () => ethers.utils.hexZeroPad(running, 32) } },
+                ethers: {
+                    provider: {
+                        getStorageAt: async () => ethers.utils.hexZeroPad(running, 32),
+                        call: async () => ethers.utils.defaultAbiCoder.encode(['bool'], [guardianCanPause]),
+                    },
+                },
             }) as never
         const failure = (hre: never) =>
             assertUpgraded(hre, 'wXTMBridge', proxy, GUARDIAN).then(

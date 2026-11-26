@@ -13,6 +13,7 @@ import { HardhatUserConfig, HttpNetworkAccountsUserConfig, NetworksUserConfig } 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
 import { listWtariConfigs } from './tasks/wtari'
+import './tasks/wxtm'
 
 /** @dev Uncomment below to use standard authentication method */
 // // Set your preferred authentication method

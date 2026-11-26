@@ -44,6 +44,7 @@ contract wXTMControllerTest is TestHelperOz5 {
         highMinter = makeAddr("highMinter");
         user = makeAddr("user");
         guardian = makeAddr("guardian");
+        vm.etch(guardian, hex"00"); // stands in for the guardian Safe: the contracts require code there
 
         deal(admin, INITIAL_BALANCE);
 
@@ -236,14 +237,31 @@ contract wXTMControllerTest is TestHelperOz5 {
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(controller)), implementation, setup);
     }
 
-    function test_rejects_zero_admin_or_guardian() public {
-        address[2][2] memory pairs = [[address(0), guardian], [admin, address(0)]];
-        for (uint256 i = 0; i < pairs.length; i++) {
+    function test_rejects_zero_admin_or_invalid_guardian() public {
+        address eoa = makeAddr("eoa");
+        address delegated = makeAddr("delegated");
+        vm.etch(delegated, abi.encodePacked(hex"ef0100", address(wxtm))); // EIP-7702 delegated EOA
+        // [admin, guardian]: zero admin; zero, EOA, delegated EOA, or admin-as-guardian.
+        address[2][5] memory cases = [
+            [address(0), guardian],
+            [admin, address(0)],
+            [admin, eoa],
+            [admin, delegated],
+            [guardian, guardian]
+        ];
+        bytes4[5] memory errors = [
+            wXTMController.ZeroAddress.selector,
+            wXTMController.InvalidGuardian.selector,
+            wXTMController.InvalidGuardian.selector,
+            wXTMController.InvalidGuardian.selector,
+            wXTMController.InvalidGuardian.selector
+        ];
+        for (uint256 i = 0; i < cases.length; i++) {
             wXTMController fresh = wXTMController(
                 address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
             );
-            vm.expectRevert(wXTMController.ZeroAddress.selector);
-            fresh.initialize(address(wxtm), lowMinter, highMinter, pairs[i][0], pairs[i][1]);
+            vm.expectRevert(errors[i]);
+            fresh.initialize(address(wxtm), lowMinter, highMinter, cases[i][0], cases[i][1]);
         }
     }
 

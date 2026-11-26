@@ -10,6 +10,7 @@ import { IwXTM } from "./interfaces/IwXTM.sol";
 contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
     error UnauthorizedToMintThisAmount();
     error NotProxyAdmin();
+    error InvalidGuardian();
     error ZeroAddress();
 
     uint256 private constant HIGH_MINT_THRESHOLD = 100_000 ether;
@@ -85,7 +86,11 @@ contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
     }
 
     function _initializePauser(address guardian) private {
-        if (guardian == address(0)) revert ZeroAddress();
+        // The guardian is a Safe and pause-only, so never the admin. A key cannot qualify: an EOA has no code, and an
+        // EIP-7702 delegated EOA has the code 0xef0100 || delegate.
+        bytes memory code = guardian.code;
+        if (code.length == 0 || bytes3(code) == 0xef0100 || hasRole(DEFAULT_ADMIN_ROLE, guardian))
+            revert InvalidGuardian();
         __Pausable_init();
 
         _grantRole(PAUSER_ROLE, guardian);

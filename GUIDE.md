@@ -7,6 +7,11 @@
 `npx hardhat lz:deploy`
 `yarn hardhat lz:deploy --tags wXTMController`
 
+#### **Upgrade a proxy hardhat-deploy cannot upgrade (e.g. wXTMController, whose ProxyAdmin is not DefaultProxyAdmin)**
+
+`npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --implementation <new implementation>`
+prints the `upgradeAndCall` transaction for the admin to sign; rerun with `--check` after it is executed.
+
 #### **Verify**
 
 `npx hardhat run scripts/verify.ts --network sepolia-testnet`

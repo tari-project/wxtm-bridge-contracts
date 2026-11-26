@@ -16,6 +16,7 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
     error InvalidAmountPrecision();
     error InvalidTargetTariAddress();
     error NotProxyAdmin();
+    error InvalidGuardian();
     error ZeroAddress();
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -126,7 +127,11 @@ contract wXTMBridge is AccessControlUpgradeable, PausableUpgradeable {
     }
 
     function _initializeAccess(address admin, address guardian) private {
-        if (admin == address(0) || guardian == address(0)) revert ZeroAddress();
+        if (admin == address(0)) revert ZeroAddress();
+        // The guardian is a Safe and pause-only, so never the admin. A key cannot qualify: an EOA has no code, and an
+        // EIP-7702 delegated EOA has the code 0xef0100 || delegate.
+        bytes memory code = guardian.code;
+        if (code.length == 0 || bytes3(code) == 0xef0100 || guardian == admin) revert InvalidGuardian();
         __AccessControl_init();
         __Pausable_init();
 
