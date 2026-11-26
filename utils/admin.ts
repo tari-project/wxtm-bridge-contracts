@@ -41,7 +41,7 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
     return guardian
 }
 
-const EIP1967_IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'
+export const EIP1967_IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'
 export const EIP1967_ADMIN_SLOT = '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
 
 export async function slotAddress(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string, slot: string) {
@@ -127,8 +127,9 @@ export async function assertUpgraded(
 }
 
 /**
- * The package's deployments.json entry for this chain. Refuses a fresh deploy of `name` when the package already
- * lists one for the chain but deployments/<network> has no record of it (hardhat-deploy would create a second one).
+ * The wXTM to wire `name` to: deployments/<network>/wXTM.json, else the package's deployments.json entry for this
+ * chain; fails if both exist and differ. Also refuses a fresh deploy of `name` when the package already lists one
+ * for the chain but deployments/<network> has no record of it (hardhat-deploy would create a second one).
  */
 export async function chainDeployments(
     hre: Pick<HardhatRuntimeEnvironment, 'deployments' | 'network' | 'getChainId'>,
@@ -143,6 +144,19 @@ export async function chainDeployments(
                 `or remove the listing to deploy a new ${name} and repoint its consumers.`
         )
     }
-    if (!listed.wXTM) throw new Error(`No wXTM for chain ${chainId} in wxtm-bridge-contracts-typechain/deployments`)
-    return listed
+    const local = (await hre.deployments.getOrNull('wXTM'))?.address
+    if (local && listed.wXTM && local.toLowerCase() !== listed.wXTM.toLowerCase()) {
+        throw new Error(
+            `wXTM on chain ${chainId} is ${local} in deployments/${hre.network.name} but ${listed.wXTM} in ` +
+                `wxtm-bridge-contracts-typechain/deployments: reconcile them first.`
+        )
+    }
+    const wXTM = local ?? listed.wXTM
+    if (!wXTM) throw new Error(`No wXTM for chain ${chainId} in deployments/${hre.network.name} or the package`)
+    return { wXTM }
+}
+
+/** The implementation deploy that hardhat-deploy derives from the proxy deploys in deploy/wxtm. */
+export function implementationOptions(name: 'wXTMBridge' | 'wXTMController') {
+    return { contract: name, args: [], deterministicDeployment: ethers.utils.id(`${name}-v0.0.1`) }
 }

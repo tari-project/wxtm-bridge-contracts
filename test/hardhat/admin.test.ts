@@ -67,28 +67,47 @@ describe('admin from named config', function () {
         }
     })
 
-    describe('package deployments for the chain', function () {
-        const hreWith = (chainId: string, recorded: object | null) =>
+    describe('wXTM and package deployments for the chain', function () {
+        const SEPOLIA_WXTM = '0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374'
+        const hreWith = (chainId: string, records: { [name: string]: string }) =>
             ({
                 network: { name: 'some-network' },
                 getChainId: async () => chainId,
-                deployments: { getOrNull: async () => recorded },
+                deployments: {
+                    getOrNull: async (name: string) => (records[name] ? { address: records[name] } : null),
+                },
             }) as never
+        const failure = (hre: never, name: 'wXTMBridge' | 'wXTMController') =>
+            chainDeployments(hre, name).then(
+                () => undefined,
+                (e: Error) => e
+            )
 
         it('refuses a fresh deploy over a contract the package lists for the chain', async function () {
-            let error: Error | undefined
-            await chainDeployments(hreWith('84532', null), 'wXTMBridge').catch((e: Error) => (error = e))
+            const error = await failure(hreWith('84532', {}), 'wXTMBridge')
             expect(error?.message).to.match(/wXTMBridge for chain 84532 is listed at 0x5261.*Import that record/)
         })
 
-        it("returns the chain's own wXTM when the contract has a local record", async function () {
-            const listed = await chainDeployments(hreWith('11155111', { address: '0x01' }), 'wXTMBridge')
-            expect(listed.wXTM).to.equal('0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374')
+        it("uses the chain's own wXTM when the contract has a local record", async function () {
+            const { wXTM } = await chainDeployments(hreWith('11155111', { wXTMBridge: '0x01' }), 'wXTMBridge')
+            expect(wXTM).to.equal(SEPOLIA_WXTM)
+            const local = hreWith('11155111', { wXTMBridge: '0x01', wXTM: SEPOLIA_WXTM.toLowerCase() })
+            expect((await chainDeployments(local, 'wXTMBridge')).wXTM).to.equal(SEPOLIA_WXTM.toLowerCase())
+        })
+
+        it('uses the local wXTM on a chain the package does not list (first deploy, or hardhat)', async function () {
+            const local = '0x4444444444444444444444444444444444444444'
+            expect((await chainDeployments(hreWith('31337', { wXTM: local }), 'wXTMController')).wXTM).to.equal(local)
+        })
+
+        it('refuses a local wXTM that differs from the package', async function () {
+            const records = { wXTMBridge: '0x01', wXTM: '0x4444444444444444444444444444444444444444' }
+            const error = await failure(hreWith('11155111', records), 'wXTMBridge')
+            expect(error?.message).to.match(/is 0x4444.* in deployments\/some-network but 0xcBe7.*reconcile/)
         })
 
         it('refuses a chain without wXTM', async function () {
-            let error: Error | undefined
-            await chainDeployments(hreWith('8453', null), 'wXTMController').catch((e: Error) => (error = e))
+            const error = await failure(hreWith('8453', {}), 'wXTMController')
             expect(error?.message).to.match(/No wXTM for chain 8453/)
         })
     })

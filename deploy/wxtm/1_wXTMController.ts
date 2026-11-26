@@ -1,9 +1,15 @@
 import assert from 'assert'
 
-import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertDeployerCanUpgrade, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
+import {
+    assertDeployerCanUpgrade,
+    assertUpgraded,
+    chainDeployments,
+    getAdmin,
+    getGuardian,
+    implementationOptions,
+} from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTMController'
@@ -24,17 +30,13 @@ const deploy: DeployFunction = async (hre) => {
     console.log(`Admin: ${admin}`)
     console.log(`Guardian: ${guardian}`)
 
-    const salt = ethers.utils.id('wXTMController-v0.0.1')
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
-        contract: contractName,
-        args: [],
-        deterministicDeployment: salt,
-    })
+    const implementation = implementationOptions(contractName)
+    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, implementation)
 
     const proxy = await deploy(contractName, {
         from: deployer,
-        args: [],
-        deterministicDeployment: salt,
+        args: implementation.args,
+        deterministicDeployment: implementation.deterministicDeployment,
         log: true,
         waitConfirmations: 5,
         skipIfAlreadyDeployed: false,

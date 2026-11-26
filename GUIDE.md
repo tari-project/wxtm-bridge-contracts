@@ -7,10 +7,12 @@
 `npx hardhat lz:deploy`
 `yarn hardhat lz:deploy --tags wXTMController`
 
-#### **Upgrade a proxy hardhat-deploy cannot upgrade (e.g. wXTMController, whose ProxyAdmin is not DefaultProxyAdmin)**
+#### **Upgrade a proxy hardhat-deploy cannot upgrade (deployer is not the admin, or a ProxyAdmin other than DefaultProxyAdmin)**
 
-`npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --implementation <new implementation>`
-prints the `upgradeAndCall` transaction for the admin to sign; rerun with `--check` after it is executed.
+1. `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --deploy-implementation` deploys the
+   implementation from the deployer and prints the `upgradeAndCall` transaction for the ProxyAdmin owner to sign.
+2. After it is executed, `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --check`
+   verifies the upgrade and records it in `deployments/mainnet`.
 
 #### **Verify**
 
