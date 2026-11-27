@@ -237,21 +237,35 @@ contract wXTMControllerTest is TestHelperOz5 {
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(controller)), implementation, setup);
     }
 
-    function test_rejects_proxy_admin_or_minter_as_guardian() public {
-        for (uint256 i = 0; i < 3; i++) {
-            wXTMController fresh = wXTMController(
-                address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
+    function test_rejects_minter_as_guardian() public {
+        address implementation = address(new wXTMController());
+        // [low minter, high minter]: the guardian as either minter.
+        address[2][2] memory cases = [[guardian, highMinter], [lowMinter, guardian]];
+        for (uint256 i = 0; i < cases.length; i++) {
+            // As in a real deploy, initialize runs in the proxy's constructor.
+            bytes memory init = abi.encodeCall(
+                wXTMController.initialize,
+                (address(wxtm), cases[i][0], cases[i][1], admin, guardian)
             );
-            address proxyAdmin = address(_proxyAdmin(address(fresh)));
-            // [low minter, high minter, guardian]: the ProxyAdmin as guardian, then the guardian as either minter.
-            address[3][3] memory cases = [
-                [lowMinter, highMinter, proxyAdmin],
-                [guardian, highMinter, guardian],
-                [lowMinter, guardian, guardian]
-            ];
             vm.expectRevert(wXTMController.InvalidGuardian.selector);
-            fresh.initialize(address(wxtm), cases[i][0], cases[i][1], admin, cases[i][2]);
+            new TransparentUpgradeableProxy(implementation, admin, init);
         }
+    }
+
+    function test_rejects_proxy_admin_as_guardian_on_upgrade() public {
+        // A live proxy at version 1, upgraded with initializeV2 naming its own ProxyAdmin as the guardian.
+        address implementation = address(new wXTMController());
+        address live = address(new TransparentUpgradeableProxy(implementation, admin, ""));
+        vm.store(live, INITIALIZABLE_SLOT, bytes32(uint256(1)));
+        ProxyAdmin proxyAdmin = _proxyAdmin(live);
+
+        vm.prank(admin);
+        vm.expectRevert(wXTMController.InvalidGuardian.selector);
+        proxyAdmin.upgradeAndCall(
+            ITransparentUpgradeableProxy(live),
+            implementation,
+            abi.encodeCall(wXTMController.initializeV2, (address(proxyAdmin)))
+        );
     }
 
     function test_rejects_zero_admin_or_invalid_guardian() public {
@@ -273,12 +287,15 @@ contract wXTMControllerTest is TestHelperOz5 {
             wXTMController.InvalidGuardian.selector,
             wXTMController.InvalidGuardian.selector
         ];
+        address implementation = address(new wXTMController());
         for (uint256 i = 0; i < cases.length; i++) {
-            wXTMController fresh = wXTMController(
-                address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
+            // As in a real deploy, initialize runs in the proxy's constructor.
+            bytes memory init = abi.encodeCall(
+                wXTMController.initialize,
+                (address(wxtm), lowMinter, highMinter, cases[i][0], cases[i][1])
             );
             vm.expectRevert(errors[i]);
-            fresh.initialize(address(wxtm), lowMinter, highMinter, cases[i][0], cases[i][1]);
+            new TransparentUpgradeableProxy(implementation, admin, init);
         }
     }
 

@@ -3,11 +3,11 @@ import assert from 'assert'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
 import {
-    MINTERS,
     assertUpgraded,
     chainDeployments,
     getAdmin,
     getGuardian,
+    getMinters,
     implementationOptions,
 } from '../../utils/admin'
 import verify from '../../utils/verify'
@@ -53,7 +53,7 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: [deployedContracts.wXTM, ...MINTERS, admin, guardian],
+                    args: [deployedContracts.wXTM, ...(await getMinters(hre)), admin, guardian],
                 },
             },
         },

@@ -18,8 +18,17 @@ export async function getAdmin(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAcc
     return admin
 }
 
-/** The wXTMController low and high minter Safes deploy/wxtm grants on a new controller. */
-export const MINTERS = ['0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee', '0xFa2459708A9549C371963a3fCd239dd614E8D52C']
+/** The `lowMinter` and `highMinter` named accounts for this network: the wXTMController minters. No default. */
+export async function getMinters(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network'>) {
+    const { lowMinter, highMinter } = await hre.getNamedAccounts()
+    if (!lowMinter || !highMinter || [lowMinter, highMinter].includes(ethers.constants.AddressZero)) {
+        throw new Error(
+            `No minters for network "${hre.network.name}": set namedAccounts.lowMinter["${hre.network.name}"] and ` +
+                `namedAccounts.highMinter["${hre.network.name}"] in hardhat.config.ts.`
+        )
+    }
+    return [lowMinter, highMinter]
+}
 
 /** Owners and threshold of the Safe at `address`, or undefined when it does not answer as a Safe. */
 export async function safeOwners(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string) {
@@ -53,7 +62,7 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
     // 0xef0100: an EIP-7702 delegated EOA, a key even if its delegate answers like a Safe.
     const delegated = (await hre.ethers.provider.getCode(guardian)).toLowerCase().startsWith('0xef0100')
     const safe = delegated ? undefined : await safeOwners(hre, guardian)
-    const forbidden = [admin, deployer, ...MINTERS].filter(Boolean).map((a) => a.toLowerCase())
+    const forbidden = [admin, deployer, ...(await getMinters(hre))].filter(Boolean).map((a) => a.toLowerCase())
     if (!safe || [guardian, ...safe.owners].some((a) => forbidden.includes(a.toLowerCase()))) {
         throw new Error(
             `Guardian ${guardian} on "${hre.network.name}" must be a Safe that is not, and is not owned by, ` +

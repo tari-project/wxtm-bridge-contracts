@@ -391,12 +391,20 @@ contract wXTMBridgeTest is TestHelperOz5 {
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(bridge)), implementation, setup);
     }
 
-    function test_rejects_proxy_admin_as_guardian() public {
-        wXTMBridge fresh = wXTMBridge(
-            address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, ""))
-        );
+    function test_rejects_proxy_admin_as_guardian_on_upgrade() public {
+        // A live proxy at version 1, upgraded with initializeV2 naming its own ProxyAdmin as the guardian.
+        address implementation = address(new wXTMBridge());
+        address live = address(new TransparentUpgradeableProxy(implementation, multiSig, ""));
+        vm.store(live, INITIALIZABLE_SLOT, bytes32(uint256(1)));
+        ProxyAdmin proxyAdmin = _proxyAdmin(live);
+
+        vm.prank(multiSig);
         vm.expectRevert(wXTMBridge.InvalidGuardian.selector);
-        fresh.initialize(address(wxtm), multiSig, address(_proxyAdmin(address(fresh))));
+        proxyAdmin.upgradeAndCall(
+            ITransparentUpgradeableProxy(live),
+            implementation,
+            abi.encodeCall(wXTMBridge.initializeV2, (multiSig, address(proxyAdmin)))
+        );
     }
 
     function test_rejects_zero_admin_or_invalid_guardian() public {
@@ -418,12 +426,12 @@ contract wXTMBridgeTest is TestHelperOz5 {
             wXTMBridge.InvalidGuardian.selector,
             wXTMBridge.InvalidGuardian.selector
         ];
+        address implementation = address(new wXTMBridge());
         for (uint256 i = 0; i < cases.length; i++) {
-            wXTMBridge fresh = wXTMBridge(
-                address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, ""))
-            );
+            // As in a real deploy, initialize runs in the proxy's constructor.
+            bytes memory init = abi.encodeCall(wXTMBridge.initialize, (address(wxtm), cases[i][0], cases[i][1]));
             vm.expectRevert(errors[i]);
-            fresh.initialize(address(wxtm), cases[i][0], cases[i][1]);
+            new TransparentUpgradeableProxy(implementation, multiSig, init);
         }
     }
 

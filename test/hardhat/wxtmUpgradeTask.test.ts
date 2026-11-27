@@ -64,6 +64,9 @@ describe('upgrade-calldata:wxtm', function () {
                 { contract, deployImplementation: false, check: false, ...flags },
                 Object.assign(Object.create(hre), {
                     getNamedAccounts: async () => ({
+                        // Mainnet's minters; any addresses other than the guardian's owners.
+                        lowMinter: '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
+                        highMinter: '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
                         deployer: from,
                         admin: configured.admin ?? admin.address,
                         guardian: configured.guardian ?? guardian,

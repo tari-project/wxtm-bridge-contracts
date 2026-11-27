@@ -88,7 +88,8 @@ contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
     function _initializePauser(address guardian) private {
         // The guardian is a Safe and pause-only, so never the admin or a minter. A key cannot qualify: an EOA has no
         // code, and an EIP-7702 delegated EOA has the code 0xef0100 || delegate. A ProxyAdmin cannot call through its
-        // proxy, so it could never pause.
+        // proxy, so it could never pause; that check only applies in initializeV2, since a new proxy runs initialize
+        // before its admin is set, so fresh deploys rely on getGuardian's Safe check (utils/admin.ts).
         bytes memory code = guardian.code;
         if (
             code.length == 0 ||

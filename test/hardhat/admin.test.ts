@@ -3,14 +3,7 @@ import { ethers } from 'ethers'
 import hre, { deployments } from 'hardhat'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
-import {
-    MINTERS,
-    assertNotListedElsewhere,
-    assertUpgraded,
-    chainDeployments,
-    getAdmin,
-    getGuardian,
-} from '../../utils/admin'
+import { assertNotListedElsewhere, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
 import { deploySafeMock } from './safeMock'
 
@@ -20,9 +13,17 @@ function hreWithAdmin(admin?: string) {
     return { network: { name: 'mainnet' }, getNamedAccounts: async () => (admin ? { admin } : {}) } as never
 }
 
-function hreWithGuardian(guardian?: string, deployer = '0x1111111111111111111111111111111111111111') {
+// Mainnet's minters.
+const LOW_MINTER = '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee'
+const HIGH_MINTER = '0xFa2459708A9549C371963a3fCd239dd614E8D52C'
+
+function hreWithGuardian(
+    guardian?: string,
+    deployer = '0x1111111111111111111111111111111111111111',
+    [lowMinter, highMinter]: (string | undefined)[] = [LOW_MINTER, HIGH_MINTER]
+) {
     return Object.assign(Object.create(hre), {
-        getNamedAccounts: async () => ({ guardian, admin: ADMIN, deployer }),
+        getNamedAccounts: async () => ({ guardian, admin: ADMIN, deployer, lowMinter, highMinter }),
     }) as HardhatRuntimeEnvironment
 }
 
@@ -64,7 +65,7 @@ describe('admin from named config', function () {
 
         const delegated = '0x5555555555555555555555555555555555555555'
         await hre.network.provider.send('hardhat_setCode', [delegated, `0xef0100${safe.slice(2)}`])
-        const minterSafe = MINTERS[0]
+        const minterSafe = LOW_MINTER
         await hre.network.provider.send('hardhat_setCode', [minterSafe, await hre.ethers.provider.getCode(safe)])
         const notASafe = (await (await hre.ethers.getContractFactory('wTARIBridge')).deploy()).address
         for (const guardian of [
@@ -75,12 +76,32 @@ describe('admin from named config', function () {
             minterSafe,
             await deploySafeMock(signer, [owner.address, ADMIN]),
             await deploySafeMock(signer, [DEPLOYER]),
-            await deploySafeMock(signer, [MINTERS[1]]),
+            await deploySafeMock(signer, [HIGH_MINTER]),
         ]) {
             let error: Error | undefined
             await getGuardian(hreWithGuardian(guardian, DEPLOYER)).catch((e: Error) => (error = e))
             expect(error?.message, guardian).to.match(/must be a Safe that is not, and is not owned by/)
         }
+    })
+
+    it("checks the guardian against the network's own minters, and fails without them", async function () {
+        const [signer] = await hre.ethers.getSigners()
+        // As on sepolia-testnet: one address is both minters (and the admin there).
+        const sepoliaMinters = [
+            '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+            '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+        ]
+        const ownedBySepoliaMinter = await deploySafeMock(signer, [sepoliaMinters[0]])
+        const errorOf = (minters?: (string | undefined)[]) =>
+            getGuardian(hreWithGuardian(ownedBySepoliaMinter, undefined, minters)).then(
+                () => undefined,
+                (e: Error) => e
+            )
+        expect((await errorOf(sepoliaMinters))?.message).to.match(/must be a Safe that is not, and is not owned by/)
+        expect(await errorOf()).to.be.undefined // with mainnet's minters it is accepted
+        expect((await errorOf([undefined, undefined]))?.message).to.match(
+            /No minters for network "hardhat": set namedAccounts\.lowMinter/
+        )
     })
 
     describe('wXTM and package deployments for the chain', function () {
