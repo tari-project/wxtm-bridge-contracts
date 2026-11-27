@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-Built and published by `.github/workflows/publish.yml` from the tag `@tari-project/wxtm-bridge-contracts@v0.3.0`, with npm provenance. This is a minor bump because the release breaks consumers, so `^0.2.x` ranges do not pick it up.
+Built and published by `.github/workflows/npm-publish.yml` (renamed from `publish.yml`) from the tag `@tari-project/wxtm-bridge-contracts@v0.3.0`, with npm provenance. This is a minor bump because the release breaks consumers, so `^0.2.x` ranges do not pick it up.
 
 ### Breaking changes
 
@@ -17,6 +17,7 @@ Built and published by `.github/workflows/publish.yml` from the tag `@tari-proje
 
 ### Changes
 
+- The publish workflow is now `.github/workflows/npm-publish.yml`. A read-only job builds and packs the tarball, and a separate job publishes exactly that tarball. npm's trusted publisher names the new file, so the old `publish.yml` on earlier tags and commits can no longer publish.
 - `deployments.json` now holds exactly the records committed in `deployments/<network>/*.json`, plus `wTARIBridgeStartBlock`. The build checks this before packing.
 
 ## 0.2.1 (2026-11-17)

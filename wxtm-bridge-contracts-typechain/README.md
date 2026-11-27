@@ -6,14 +6,14 @@
 
 ### Publishing
 
-`.github/workflows/publish.yml` runs only for a tag named `@tari-project/wxtm-bridge-contracts@vX.Y.Z` (digits only; other tag names, such as `release/*`, never start it), and has no manual trigger. It has two jobs:
+`.github/workflows/npm-publish.yml` runs only for a tag named `@tari-project/wxtm-bridge-contracts@vX.Y.Z` (digits only; other tag names, such as `release/*`, never start it), and has no manual trigger. It has two jobs:
 
 1. **build** (read-only, no publish credentials): checks that the tagged commit is on `development` and that the tag matches `package.json`'s version, runs `npm ci --ignore-scripts`, compiles, runs `npm run verify:wtari-package`, builds, and packs the tarball. The job log and summary show the tarball's SHA-256.
 2. **publish** (GitHub environment `npm-publish`, `id-token: write`): no checkout and no install. It downloads that tarball, checks its SHA-256 and runs `npm publish <tarball> --provenance --ignore-scripts`.
 
 `verify:wtari-package` fails unless `deployments/deployments.json` holds exactly the records in `deployments/<network>/*.json` for every network directory with a `.chainId` (only `wTARIBridgeStartBlock` may be added), and the wTARI entries match their recomputed CREATE2 addresses. CI cannot run `export-deployments-*` (it needs RPC access), so regenerate and commit `deployments.json` before tagging.
 
-GitHub runs the workflow file from the tagged commit. A tag on an old commit therefore runs that commit's older `publish.yml`: reject its `npm-publish` approval.
+Until 0.2.1 the package was published by `.github/workflows/publish.yml`, a single job that installed and compiled with `id-token: write` and could also be started by hand. Every older release tag and commit still carries that file, and GitHub runs the workflow file from the tagged commit (or the dispatched ref). npm's trusted publisher matches only the workflow file name and the environment. So once the trusted-publisher entry names `npm-publish.yml`, npm no longer accepts a publish from any old `publish.yml` run. Cancel such runs anyway, and reject their `npm-publish` approval.
 
 #### Repository and npm settings
 
@@ -21,7 +21,7 @@ These cannot be enforced from the repository; maintainers must configure them:
 
 - GitHub environment `npm-publish` with required reviewers, and deployments restricted to protected tags.
 - A tag protection rule or ruleset for `@tari-project/wxtm-bridge-contracts@v*`, so only maintainers can create those tags.
-- An npm trusted publisher for `@tari-project/wxtm-bridge-contracts` bound to this repository, the workflow `publish.yml`, and the environment `npm-publish`.
+- An npm trusted publisher for `@tari-project/wxtm-bridge-contracts` bound to this repository, the workflow `npm-publish.yml`, and the environment `npm-publish`. **Before tagging 0.3.0, switch the existing entry from `publish.yml` to `npm-publish.yml`.** This switch is what stops the older `publish.yml` copies on old tags and commits from publishing.
 
 #### Release steps
 
