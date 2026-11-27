@@ -1,6 +1,6 @@
 name: wXTM bridge contracts package publish
 
-# Only version-shaped release tags (e.g. @tari-project/wxtm-bridge-contracts@v0.2.2). Other tag names, such as
+# Only version-shaped release tags (e.g. @tari-project/wxtm-bridge-contracts@v0.3.0). Other tag names, such as
 # release/wxtm-bridge-contracts-0.2.0, never start this workflow. No workflow_dispatch: a manual run could
 # otherwise target an arbitrary ref.
 on:

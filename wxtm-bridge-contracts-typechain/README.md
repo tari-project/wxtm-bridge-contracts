@@ -34,8 +34,8 @@ These cannot be enforced from the repository; maintainers must configure them:
 2. Merge to `development`, then tag the merged commit with the matching name and push the tag:
 
    ```sh
-   git tag -a "@tari-project/wxtm-bridge-contracts@v0.2.2" <development commit> -m "wxtm-bridge-contracts 0.2.2"
-   git push origin "@tari-project/wxtm-bridge-contracts@v0.2.2"
+   git tag -a "@tari-project/wxtm-bridge-contracts@v0.3.0" <development commit> -m "wxtm-bridge-contracts 0.3.0"
+   git push origin "@tari-project/wxtm-bridge-contracts@v0.3.0"
    ```
 
 3. Before approving the `npm-publish` environment, check the build job's log: the tag and `development` checks passed, and the packed file list is as expected.

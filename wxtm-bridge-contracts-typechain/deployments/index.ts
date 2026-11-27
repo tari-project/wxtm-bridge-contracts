@@ -24,7 +24,7 @@ const allDeployments = deployments as { [chainId: string]: { [name: string]: str
 // Chains with the full wXTM set (wXTM, wXTMBridge, wXTMController).
 export type WxtmChain = 1 | 11155111
 
-// Base Sepolia has wXTM and wXTMController but no wXTMBridge (the old testnet bridge was retired; since 0.2.2).
+// Base Sepolia has wXTM and wXTMController but no wXTMBridge (the old testnet bridge was retired; since 0.3.0).
 export type WxtmChainWithoutBridge = 84532
 
 // wXTM chains keep the required wXTM fields; any other chain id (e.g. 8453, or one from getWtariChains) may lack them.

@@ -1,6 +1,6 @@
 {
   "name": "@tari-project/wxtm-bridge-contracts",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Utility pack for wxtm-bridge-contracts",
   "keywords": [
     "wxtmbridge",
