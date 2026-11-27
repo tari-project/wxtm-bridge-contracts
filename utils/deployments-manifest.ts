@@ -162,3 +162,150 @@ export async function updateManifestEntry<T>(
         options
     )
 }
+
+export const WTARI_PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
+
+// The hardhat-deploy records deploy:wtari creates; exactly these are exported to the package.
+export const WTARI_RECORD_NAMES = [
+    WTARI_PROXY_ADMIN_NAME,
+    'wTARI',
+    'wTARI_Proxy',
+    'wTARI_Implementation',
+    'wTARIController',
+    'wTARIController_Proxy',
+    'wTARIController_Implementation',
+    'wTARIBridge',
+    'wTARIBridge_Proxy',
+    'wTARIBridge_Implementation',
+] as const
+
+/** The only key a package entry may carry beyond the committed deployment records (written by export-deployments). */
+export const PACKAGE_EXTRA_KEYS = ['wTARIBridgeStartBlock']
+
+// Own keys only: `in` also sees inherited keys such as constructor, toString or __proto__.
+const hasOwn = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key)
+
+/**
+ * Addresses of the committed hardhat-deploy records in one network directory (`deployments/<network>/*.json`),
+ * by record name. Only these records belong in the package: hardhat-deploy's `deployments.all()` also returns
+ * external (LayerZero) deployments, whose DefaultProxyAdmin overrides ours.
+ */
+export function localDeploymentAddresses(networkDir: string): { [name: string]: string } {
+    const addresses: { [name: string]: string } = {}
+    for (const file of fs.readdirSync(networkDir).sort()) {
+        if (!file.endsWith('.json') || !fs.statSync(path.join(networkDir, file)).isFile()) continue
+        const { address } = JSON.parse(fs.readFileSync(path.join(networkDir, file), 'utf8'))
+        if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+            throw new Error(`${path.join(networkDir, file)} has no valid address`)
+        }
+        const name = path.basename(file, '.json')
+        if (name === '__proto__') throw new Error(`${path.join(networkDir, file)}: invalid record name`)
+        addresses[name] = address
+    }
+    return addresses
+}
+
+/** Network directories under `deploymentsDir` that have a hardhat-deploy `.chainId` file, by chain id. */
+export function localDeploymentChains(deploymentsDir: string) {
+    const chains: { [chainId: string]: string[] } = {}
+    for (const network of fs.readdirSync(deploymentsDir).sort()) {
+        const chainIdFile = path.join(deploymentsDir, network, '.chainId')
+        if (!fs.existsSync(chainIdFile)) continue
+        const chainId = fs.readFileSync(chainIdFile, 'utf8').trim()
+        if (!/^\d+$/.test(chainId)) throw new Error(`${chainIdFile}: ${chainId} is not a decimal chain id`)
+        ;(chains[chainId] ??= []).push(network)
+    }
+    return chains
+}
+
+/**
+ * Offline check that the package's deployments.json holds exactly the committed deployment records: for every
+ * `deployments/<network>` with a `.chainId`, the chain's entry has the same record names and addresses, plus at
+ * most PACKAGE_EXTRA_KEYS; and every chain in the manifest has such a directory. Returns the problems found.
+ */
+export function packageDeploymentProblems(
+    manifest: Manifest<{ [key: string]: string | number }>,
+    deploymentsDir: string
+) {
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+        return ['deployments.json is not an object of chain entries']
+    }
+    const problems: string[] = []
+    const chains = localDeploymentChains(deploymentsDir)
+    for (const [chainId, networks] of Object.entries(chains)) {
+        if (networks.length > 1) {
+            problems.push(`chain ${chainId}: several deployment directories (${networks.join(', ')})`)
+            continue
+        }
+        if (!hasOwn(manifest, chainId)) {
+            problems.push(`chain ${chainId}: missing from the package (deployments/${networks[0]} exists)`)
+            continue
+        }
+        const entry: unknown = manifest[chainId]
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+            problems.push(`chain ${chainId}: entry is not an object`)
+            continue
+        }
+        const values = entry as { [key: string]: unknown }
+        const local = localDeploymentAddresses(path.join(deploymentsDir, networks[0]))
+        for (const [name, address] of Object.entries(local)) {
+            if (!hasOwn(values, name)) problems.push(`chain ${chainId}: missing ${name}`)
+            else if (values[name] !== address) {
+                problems.push(`chain ${chainId}: ${name} is ${values[name]}, deployments/${networks[0]} has ${address}`)
+            }
+        }
+        for (const key of Object.keys(values)) {
+            if (PACKAGE_EXTRA_KEYS.includes(key)) {
+                if (typeof values[key] !== 'number') problems.push(`chain ${chainId}: ${key} is not a number`)
+            } else if (!hasOwn(local, key)) {
+                problems.push(`chain ${chainId}: ${key} has no deployments/${networks[0]}/${key}.json`)
+            }
+        }
+    }
+    for (const chainId of Object.keys(manifest)) {
+        if (!/^\d+$/.test(chainId)) problems.push(`chain ${chainId}: not a decimal chain id`)
+        else if (!hasOwn(chains, chainId)) {
+            problems.push(`chain ${chainId}: no deployments/<network> directory with this .chainId`)
+        }
+    }
+    return problems
+}
+
+/**
+ * Offline check of the wTARI keys in the package's deployments.json against deploy/wtari/<chainId>.json (Node
+ * builtins only, so the publish workflow's check job can run it): every chain with wTARI* keys has exactly
+ * WTARI_RECORD_NAMES plus wTARIBridgeStartBlock, a config file, and a config bridgeStartBlock equal to
+ * wTARIBridgeStartBlock. The CREATE2 address recomputation is in wtariPackageProblems (tasks/wtari.ts).
+ */
+export function wtariStartBlockProblems(manifest: unknown, wtariConfigDir: string) {
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+        return ['deployments.json is not an object of chain entries']
+    }
+    const problems: string[] = []
+    const wanted = [...WTARI_RECORD_NAMES, 'wTARIBridgeStartBlock'].sort()
+    for (const [chainId, entry] of Object.entries(manifest)) {
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+        const values = entry as { [key: string]: unknown }
+        const keys = Object.keys(values)
+            .filter((key) => key.startsWith('wTARI'))
+            .sort()
+        if (keys.length === 0) continue
+        if (JSON.stringify(keys) !== JSON.stringify(wanted)) {
+            problems.push(`chain ${chainId}: wTARI keys ${keys.join(', ')} are not exactly ${wanted.join(', ')}`)
+        }
+        const configFile = path.join(wtariConfigDir, `${chainId}.json`)
+        if (!/^\d+$/.test(chainId) || !fs.existsSync(configFile)) {
+            problems.push(`chain ${chainId}: has wTARI keys but no deploy/wtari/${chainId}.json`)
+            continue
+        }
+        const { bridgeStartBlock } = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+        if (!Number.isInteger(bridgeStartBlock) || bridgeStartBlock <= 0) {
+            problems.push(`chain ${chainId}: deploy/wtari/${chainId}.json has no positive integer bridgeStartBlock`)
+        } else if (values.wTARIBridgeStartBlock !== bridgeStartBlock) {
+            problems.push(
+                `chain ${chainId}: wTARIBridgeStartBlock ${values.wTARIBridgeStartBlock} is not deploy/wtari/${chainId}.json's ${bridgeStartBlock}`
+            )
+        }
+    }
+    return problems
+}

@@ -143,9 +143,9 @@ describe('admin from named config', function () {
         const failure = (hre: never, name: 'wXTMBridge' | 'wXTMController') => refusalOf(chainDeployments(hre, name))
 
         it('refuses a fresh deploy over a contract the package lists for the chain', async function () {
-            const error = await failure(hreWith('84532', {}), 'wXTMBridge')
+            const error = await failure(hreWith('11155111', {}), 'wXTMBridge')
             expect(error?.message).to.match(
-                /wXTMBridge for chain 84532 is listed at 0x5261.*Import its records \(wXTMBridge.json, wXTMBridge_Implementation.json, wXTMBridge_Proxy.json\)/
+                /wXTMBridge for chain 11155111 is listed at 0x4F31.*Import its records \(wXTMBridge.json, wXTMBridge_Implementation.json, wXTMBridge_Proxy.json\)/
             )
         })
 

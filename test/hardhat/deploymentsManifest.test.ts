@@ -5,7 +5,15 @@ import path from 'path'
 
 import { expect } from 'chai'
 
-import { readManifest, updateManifestEntry, withFileLock } from '../../utils/deployments-manifest'
+import {
+    WTARI_RECORD_NAMES,
+    localDeploymentAddresses,
+    packageDeploymentProblems,
+    readManifest,
+    updateManifestEntry,
+    withFileLock,
+    wtariStartBlockProblems,
+} from '../../utils/deployments-manifest'
 
 const ROOT = path.join(__dirname, '..', '..')
 const MODULE = path.join(ROOT, 'utils', 'deployments-manifest.ts')
@@ -109,5 +117,130 @@ describe('export-deployments manifest writes', function () {
         }
         expect(error?.message).to.include('Timed out waiting for')
         expect(fs.readFileSync(lock, 'utf8')).to.equal(`${process.pid}:${os.hostname()}:live`)
+    })
+})
+
+describe('package deployments.json against deployments/<network>', function () {
+    const A = '0x' + '1'.repeat(40)
+    const B = '0x' + '2'.repeat(40)
+    const C = '0x' + '3'.repeat(40)
+    let dir: string
+    function network(name: string, chainId: string, records: { [name: string]: string }) {
+        const networkDir = path.join(dir, name)
+        fs.mkdirSync(path.join(networkDir, 'solcInputs'), { recursive: true })
+        fs.writeFileSync(path.join(networkDir, '.chainId'), chainId)
+        fs.writeFileSync(path.join(networkDir, 'notes.md'), 'not a record')
+        for (const [record, address] of Object.entries(records)) {
+            fs.writeFileSync(path.join(networkDir, `${record}.json`), JSON.stringify({ address, abi: [] }))
+        }
+    }
+    beforeEach(function () {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wtari-package-'))
+        network('mainnet', '1', { DefaultProxyAdmin: A, wXTM: B })
+        network('base-sepolia-testnet', '84532', { wXTM: B, wTARI: C })
+        // A directory without .chainId (like a checklist folder) is not a chain.
+        fs.mkdirSync(path.join(dir, 'docs'))
+    })
+    afterEach(function () {
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('reads only the record files of a network directory', function () {
+        expect(localDeploymentAddresses(path.join(dir, 'mainnet'))).to.deep.equal({ DefaultProxyAdmin: A, wXTM: B })
+    })
+
+    it('accepts an exact match plus wTARIBridgeStartBlock', function () {
+        const manifest = {
+            1: { DefaultProxyAdmin: A, wXTM: B },
+            84532: { wXTM: B, wTARI: C, wTARIBridgeStartBlock: 5 },
+        }
+        expect(packageDeploymentProblems(manifest, dir)).to.deep.equal([])
+    })
+
+    it('reports a changed address, extra and missing keys, and missing or unknown chains', function () {
+        const manifest = {
+            // LayerZero's DefaultProxyAdmin overriding ours, and an external LayerZero record.
+            1: { DefaultProxyAdmin: C, wXTM: B, EndpointV2: A },
+            // A retired record whose deployment file is gone.
+            84532: { wXTM: B, wXTMBridge: A },
+            8453: { wXTM: B },
+        }
+        expect(packageDeploymentProblems(manifest, dir)).to.deep.equal([
+            `chain 1: DefaultProxyAdmin is ${C}, deployments/mainnet has ${A}`,
+            `chain 1: EndpointV2 has no deployments/mainnet/EndpointV2.json`,
+            `chain 84532: missing wTARI`,
+            `chain 84532: wXTMBridge has no deployments/base-sepolia-testnet/wXTMBridge.json`,
+            `chain 8453: no deployments/<network> directory with this .chainId`,
+        ])
+        expect(packageDeploymentProblems({ 1: { DefaultProxyAdmin: A, wXTM: B } }, dir)).to.deep.equal([
+            'chain 84532: missing from the package (deployments/base-sepolia-testnet exists)',
+        ])
+    })
+
+    it('rejects inherited-name keys, non-numeric chain ids and a non-number start block', function () {
+        // JSON.parse makes "__proto__" an own key; consumers' bundlers may still read it as the prototype.
+        const parsed = JSON.parse(
+            `{"1": {"DefaultProxyAdmin": "${A}", "wXTM": "${B}"},` +
+                ` "84532": {"wXTM": "${B}", "wTARI": "${C}", "__proto__": {"wTARI": "${A}"}, "constructor": "${A}",` +
+                ` "wTARIBridgeStartBlock": "5"}, "__proto__": {"wXTM": "${B}"}, "constructor": {"wXTM": "${B}"}}`
+        )
+        expect(Object.prototype.hasOwnProperty.call(parsed['84532'], '__proto__')).to.equal(true)
+        expect(packageDeploymentProblems(parsed, dir)).to.deep.equal([
+            'chain 84532: __proto__ has no deployments/base-sepolia-testnet/__proto__.json',
+            'chain 84532: constructor has no deployments/base-sepolia-testnet/constructor.json',
+            'chain 84532: wTARIBridgeStartBlock is not a number',
+            'chain __proto__: not a decimal chain id',
+            'chain constructor: not a decimal chain id',
+        ])
+    })
+
+    it('reports a top-level value that is not an object instead of throwing', function () {
+        for (const value of ['null', '[]', '5']) {
+            expect(packageDeploymentProblems(JSON.parse(value), dir)).to.deep.equal([
+                'deployments.json is not an object of chain entries',
+            ])
+        }
+    })
+
+    it('rejects two deployment directories for one chain', function () {
+        network('mainnet-copy', '1', { wXTM: B })
+        const problems = packageDeploymentProblems({ 1: { wXTM: B } }, dir)
+        expect(problems).to.include('chain 1: several deployment directories (mainnet, mainnet-copy)')
+    })
+
+    it('holds for the committed package deployments.json', function () {
+        const manifest = readManifest<{ [key: string]: string | number }>(
+            path.join(ROOT, 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+        )
+        expect(packageDeploymentProblems(manifest, path.join(ROOT, 'deployments'))).to.deep.equal([])
+    })
+})
+
+const WTARI_KEYS = [...WTARI_RECORD_NAMES, 'wTARIBridgeStartBlock'].sort()
+
+describe('package wTARI start block against deploy/wtari (check job)', function () {
+    const configDir = path.join(ROOT, 'deploy', 'wtari')
+    const committed = () =>
+        readManifest<{ [key: string]: string | number }>(
+            path.join(ROOT, 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+        )
+
+    it('holds for the committed package deployments.json', function () {
+        expect(wtariStartBlockProblems(committed(), configDir)).to.deep.equal([])
+    })
+
+    it('reports a different start block, a missing config and a wrong wTARI key set', function () {
+        const manifest = committed()
+        const start = manifest['84532'].wTARIBridgeStartBlock as number
+        manifest['84532'].wTARIBridgeStartBlock = start + 1
+        manifest['999'] = { wTARI: '0x01' }
+        expect(wtariStartBlockProblems(manifest, configDir)).to.deep.equal([
+            `chain 999: wTARI keys wTARI are not exactly ${[...WTARI_KEYS].join(', ')}`,
+            'chain 999: has wTARI keys but no deploy/wtari/999.json',
+            `chain 84532: wTARIBridgeStartBlock ${start + 1} is not deploy/wtari/84532.json's ${start}`,
+        ])
+        expect(wtariStartBlockProblems(null, configDir)).to.deep.equal([
+            'deployments.json is not an object of chain entries',
+        ])
     })
 })

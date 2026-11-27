@@ -10,6 +10,7 @@ import TransparentUpgradeableProxy from 'hardhat-deploy/extendedArtifacts/Transp
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
+import { WTARI_PROXY_ADMIN_NAME, WTARI_RECORD_NAMES, packageDeploymentProblems } from '../utils/deployments-manifest'
 import { checkHasCode, checkSafe } from '../utils/safe'
 
 export interface WtariChainConfig {
@@ -56,7 +57,7 @@ export const REFERENCE_SAFES: { [chainId: number]: { mintLowSafe: string; mintHi
 // Chains that are always production, whatever the config says.
 const MAINNET_CHAIN_IDS = [1, 8453, 10, 42161, 137, 56, 43114]
 
-const PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
+const PROXY_ADMIN_NAME = WTARI_PROXY_ADMIN_NAME
 const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
 const MINTER_ROLE = ethers.utils.id('MINTER_ROLE')
 const LOW_MINTER_ROLE = ethers.utils.id('LOW_MINTER_ROLE')
@@ -639,19 +640,8 @@ function create2(salt: string, initCode: string): ExpectedCreation {
     return { address, salt, initCode }
 }
 
-// The hardhat-deploy records deploy:wtari creates; exactly these are exported to the package.
-export const WTARI_RECORD_NAMES = [
-    PROXY_ADMIN_NAME,
-    'wTARI',
-    'wTARI_Proxy',
-    'wTARI_Implementation',
-    'wTARIController',
-    'wTARIController_Proxy',
-    'wTARIController_Implementation',
-    'wTARIBridge',
-    'wTARIBridge_Proxy',
-    'wTARIBridge_Implementation',
-] as const
+// Defined in utils/deployments-manifest.ts (Node builtins only) so the publish workflow's check job can use it.
+export { WTARI_RECORD_NAMES }
 
 /** Every wTARI deployment record's CREATE2 address, recomputed from compiled code, salts and config. */
 export async function expectedWtariCreations(
@@ -1184,7 +1174,8 @@ export type ExportedEntry = { [key: string]: string | number }
  * WTARI_RECORD_NAMES set: unchanged addresses keep what was exported (and checked) before; new or changed
  * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. When the set
  * is incomplete, has unexpected wTARI* records, or fails the check, the last good (previously exported) set
- * is kept. Other records are always exported.
+ * is kept. A chain without wTARI* records gets no wTARI keys, even if earlier exports had some. Other records
+ * are exported exactly as in `addresses`; earlier non-wTARI keys are not kept.
  */
 export async function exportedChainEntry(
     previous: ExportedEntry,
@@ -1193,10 +1184,9 @@ export async function exportedChainEntry(
     configuredStartBlock: number | undefined,
     check: () => Promise<number>
 ) {
+    // Non-wTARI records come only from `addresses`: nothing else is carried over from the previous file, so a
+    // record whose deployment file was removed (or an external one exported earlier) drops out.
     const entry: ExportedEntry = {}
-    for (const [key, value] of Object.entries(previous)) {
-        if (!key.startsWith('wTARI')) entry[key] = value
-    }
     const wtariAddresses: ExportedEntry = {}
     for (const [name, address] of Object.entries(addresses)) {
         if (name.startsWith('wTARI')) wtariAddresses[name] = address
@@ -1217,18 +1207,16 @@ export async function exportedChainEntry(
         previousAddresses.length === names.length &&
         previousAddresses.every(([key, value]) => wtariAddresses[key] === value)
 
-    // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
-    // not block exports of an unchanged set.
-    if (names.length === 0) {
-        for (const [key, value] of previousWtari) entry[key] = value
-        return { entry, wtariFailed: false }
-    }
+    // No wTARI records on this chain: export none, dropping any wTARI keys (and start block) exported earlier.
+    if (names.length === 0) return { entry, wtariFailed: false }
     if (configuredStartBlock === undefined) {
         return keepLastGood('the chain config has no bridgeStartBlock; record it from check:wtari first')
     }
     if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
         return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
+    // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
+    // not block exports of an unchanged set.
     if (unchanged) {
         if (previous.wTARIBridgeStartBlock !== configuredStartBlock) {
             return keepLastGood(
@@ -1263,7 +1251,11 @@ export async function wtariPackageProblems(
     exported: { [chainId: string]: ExportedEntry }
 ) {
     const problems: string[] = []
+    // A malformed top-level value is reported by packageDeploymentProblems.
+    if (typeof exported !== 'object' || exported === null) return problems
     for (const [chainId, entry] of Object.entries(exported)) {
+        // Malformed entries (null, arrays, scalars) are reported by packageDeploymentProblems.
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
         const keys = Object.keys(entry).filter((key) => key.startsWith('wTARI'))
         if (keys.length === 0) continue
         if (!hasWtariConfig(Number(chainId))) {
@@ -1413,11 +1405,16 @@ task('check:wtari', 'Check wTARI Safes, roles, ownership, LZ config, bytecode an
         }
     )
 
-task('verify:wtari-package', 'Offline check of the wTARI entries in the package deployments.json (no RPC)').setAction(
-    async (_args, hre) => {
-        const file = path.join(__dirname, '..', 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
-        const problems = await wtariPackageProblems(hre, JSON.parse(fs.readFileSync(file, 'utf8')))
-        if (problems.length > 0) throw new Error(`wTARI package entries are invalid:\n${problems.join('\n')}`)
-        console.log('wTARI package entries match the recomputed CREATE2 addresses')
-    }
-)
+task(
+    'verify:wtari-package',
+    'Offline check of the package deployments.json against deployments/<network> and the wTARI CREATE2 addresses (no RPC)'
+).setAction(async (_args, hre) => {
+    const file = path.join(__dirname, '..', 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const problems = [
+        ...packageDeploymentProblems(manifest, path.join(__dirname, '..', 'deployments')),
+        ...(await wtariPackageProblems(hre, manifest)),
+    ]
+    if (problems.length > 0) throw new Error(`package deployments.json is invalid:\n${problems.join('\n')}`)
+    console.log('package deployments.json matches deployments/<network> and the recomputed wTARI CREATE2 addresses')
+})

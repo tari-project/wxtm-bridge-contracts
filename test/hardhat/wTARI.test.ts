@@ -900,6 +900,12 @@ describe('verify:wtari-package (offline)', function () {
         return entry
     }
 
+    it('skips malformed chain entries (packageDeploymentProblems reports them)', async function () {
+        const malformed = JSON.parse('{"1": null, "11155111": [], "84532": 5}')
+        expect(await wtariPackageProblems(hre, malformed)).to.deep.equal([])
+        expect(await wtariPackageProblems(hre, JSON.parse('null'))).to.deep.equal([])
+    })
+
     it('passes an honest entry and leaves chains without wTARI alone', async function () {
         expect(await wtariPackageProblems(hre, { '1': { wXTM: '0x01' }, '84532': honest() })).to.deep.equal([])
     })
@@ -1118,11 +1124,28 @@ describe('export-deployments wTARI gate', function () {
         throw new Error('check failed')
     }
 
-    it('exports wXTM-only networks unchanged and keeps earlier wTARI keys when there are no wTARI records', async function () {
-        const previous = { wXTM: '0x01', wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
-        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
-        expect(entry).to.deep.equal({ ...previous, ...wxtm })
+    it('exports wXTM-only networks exactly as their records', async function () {
+        const { entry, wtariFailed } = await exportedChainEntry({ wXTM: '0x01' }, wxtm, undefined, failing)
+        expect(entry).to.deep.equal(wxtm)
         expect(wtariFailed).to.equal(false)
+    })
+
+    it('drops non-wTARI keys of the previous entry that are not in the current deployment records', async function () {
+        // A retired bridge and an external (LayerZero) record exported earlier, plus a stale DefaultProxyAdmin.
+        const previous = { ...wxtm, wXTMBridge: '0x03', EndpointV2: '0x04', DefaultProxyAdmin: '0x05' }
+        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
+        expect(entry).to.deep.equal(wxtm)
+        expect(wtariFailed).to.equal(false)
+    })
+
+    it('drops earlier wTARI keys and the start block when the chain has no wTARI records', async function () {
+        const previous = { ...wxtm, ...wtari, wTARIBridgeStartBlock: 7 }
+        // With or without a configured start block, and without running the check.
+        for (const configured of [undefined, 7]) {
+            const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, configured, failing)
+            expect(entry).to.deep.equal(wxtm)
+            expect(wtariFailed).to.equal(false)
+        }
     })
 
     it('exports a new wTARI set only after the check passes, with the proven start block', async function () {
@@ -1196,5 +1219,12 @@ describe('typechain package deployments', function () {
         // @ts-expect-error Base has no wXTM, so getDeployments(8453).wXTM is WagmiAddress | undefined.
         const base: WagmiAddress = getDeployments(8453).wXTM
         expect(base).to.equal(undefined)
+
+        // Base Sepolia keeps wXTM but has no wXTMBridge (the stale testnet bridge is no longer exported).
+        const baseSepoliaWxtm: WagmiAddress = getDeployments(84532).wXTM
+        expect(baseSepoliaWxtm).to.equal('0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374')
+        // @ts-expect-error getDeployments(84532).wXTMBridge is undefined.
+        const baseSepoliaBridge: WagmiAddress = getDeployments(84532).wXTMBridge
+        expect(baseSepoliaBridge).to.equal(undefined)
     })
 })

@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import * as path from 'path'
 
 import hre from 'hardhat'
 
@@ -11,14 +12,20 @@ import {
     referenceProviderFor,
     withRedactedRpcUrls,
 } from '../../tasks/wtari'
-import { readManifest, updateManifestEntry } from '../../utils/deployments-manifest'
+import { localDeploymentAddresses, readManifest, updateManifestEntry } from '../../utils/deployments-manifest'
 
 async function exportDeploymentsAddresses(path_directory: string) {
     //@ts-ignore
     const chainId = await hre.getChainId()
 
-    //@ts-ignore
-    const deployments = await hre.deployments.all()
+    // Only the committed records in deployments/<network>: hre.deployments.all() also returns LayerZero's
+    // external deployments (whose DefaultProxyAdmin overrides ours).
+    const networkDir = path.join('deployments', hre.network.name)
+    const chainIdFile = path.join(networkDir, '.chainId')
+    if (!fs.existsSync(chainIdFile) || fs.readFileSync(chainIdFile, 'utf8').trim() !== String(chainId)) {
+        throw new Error(`${chainIdFile} is missing or is not chain ${chainId}`)
+    }
+    const addresses = localDeploymentAddresses(networkDir)
 
     if (!fs.existsSync(path_directory)) {
         fs.mkdirSync(path_directory)
@@ -27,9 +34,6 @@ async function exportDeploymentsAddresses(path_directory: string) {
     // Snapshot of this chain's entry; the file is re-read under a lock before writing (see below).
     const previousEntry = readManifest<ExportedEntry>(file)[chainId]
     const previous: ExportedEntry = previousEntry ?? {}
-
-    const addresses: { [name: string]: string } = {}
-    for (const name of Object.keys(deployments)) addresses[name] = deployments[name].address
 
     const configuredStartBlock = hasWtariConfig(Number(chainId))
         ? readWtariConfig(Number(chainId)).bridgeStartBlock
