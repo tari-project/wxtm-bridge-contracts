@@ -42,7 +42,7 @@ The tag, `development` and version checks inside the workflow run from the tagge
   - **Deployment branches and tags** set to **Selected branches and tags**, with only the tag rule `@tari-project/wxtm-bridge-contracts@v*` and no branch rules;
   - **Required reviewers** with **Prevent self-review** enabled.
 - A tag ruleset targeting `@tari-project/wxtm-bridge-contracts@v*` that restricts creations, updates and deletions to maintainers, with a minimal bypass list.
-- A `CODEOWNERS` file that requires maintainer review for everything that shapes the package or its checks: `wxtm-bridge-contracts-typechain/**`, `deployments/**`, `deploy/wtari/**`, `utils/deployments-manifest.ts`, `tasks/wtari.ts`, `scripts/copy.sh`, `scripts/build/**`, the root `package.json`, `package-lock.json`, `hardhat.config.ts` and `.github/workflows/`.
+- A `CODEOWNERS` file that requires maintainer review for everything that shapes the package or its checks: `wxtm-bridge-contracts-typechain/**`, `contracts/**`, `deployments/**`, `deploy/wtari/**`, `utils/deployments-manifest.ts`, `tasks/wtari.ts`, `scripts/copy.sh`, `scripts/build/**`, the root `package.json`, `package-lock.json`, `hardhat.config.ts` and `.github/workflows/`.
 - Branch protection on `development`: **Require review from Code Owners**, **Require approval of the most recent reviewable push**, and **Do not allow bypassing the above settings**.
 - An npm trusted publisher for `@tari-project/wxtm-bridge-contracts` bound to this repository, the workflow `npm-publish.yml`, and the environment `npm-publish`. **Before merging the PR that adds `npm-publish.yml`, switch the existing entry from `publish.yml` to `npm-publish.yml`.** This switch stops the older `publish.yml` copies on old tags and commits from publishing through OIDC.
 - On npm, the package's **Settings → Publishing access** set to **Require two-factor authentication and disallow tokens**, so only the trusted publisher can publish. Also revoke existing publish-capable granular or automation tokens, and keep the package's maintainer list minimal.
@@ -77,11 +77,15 @@ The tag, `development` and version checks inside the workflow run from the tagge
 
    - The run's commit SHA (shown on the run page) equals that `$sha`.
 
-   - The approver reviews everything that changed in the package and its checks since the previous release tag, not just the version bump:
+   - The approver reviews everything that changed in the package, the inputs that generate it and its checks since the previous release tag (`@tari-project/wxtm-bridge-contracts@v0.2.1` for 0.3.0), not just the version bump. Run it with `--stat` first, then review the full diff:
 
      ```sh
-     git diff "@tari-project/wxtm-bridge-contracts@v0.2.1" "$sha" -- wxtm-bridge-contracts-typechain deployments \
-       deploy/wtari utils/deployments-manifest.ts tasks/wtari.ts .github/workflows/npm-publish.yml
+     prev="@tari-project/wxtm-bridge-contracts@v0.2.1" # the previous release tag
+     paths=(wxtm-bridge-contracts-typechain contracts deployments deploy/wtari utils/deployments-manifest.ts
+       tasks/wtari.ts package.json package-lock.json hardhat.config.ts scripts/copy.sh scripts/build
+       .github/workflows/npm-publish.yml)
+     git diff --stat "$prev" "$sha" -- "${paths[@]}"
+     git diff "$prev" "$sha" -- "${paths[@]}"
      ```
 
    - The check job passed. Its log and summary show the verified SHA-256 and the packed file list, and the list is as expected. The build job's log and summary come from a job that runs dependency code, so they are not evidence.
