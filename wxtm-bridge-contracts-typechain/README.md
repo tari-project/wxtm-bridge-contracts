@@ -8,12 +8,13 @@
 
 `.github/workflows/npm-publish.yml` runs only for a tag named `@tari-project/wxtm-bridge-contracts@vX.Y.Z` (digits only; other tag names, such as `release/*`, never start it), and has no manual trigger. It has three jobs:
 
-1. **build** (read-only, no publish credentials): checks that the tagged commit is on `development` and that the tag matches `package.json`'s version, runs `npm ci --ignore-scripts`, compiles, runs `npm run verify:wtari-package`, builds, and packs the tarball. The job log and summary show the tarball's SHA-256.
+1. **build** (read-only, no publish credentials): checks that the tagged commit is on `development` and that the tag matches `package.json`'s version, runs `npm ci --ignore-scripts`, compiles, runs `npm run verify:wtari-package`, builds, and packs the tarball. The job log and summary show the tarball's SHA-256. The tarball is kept as an artifact for 30 days, so a late approval still finds it.
 2. **check** (read-only, no install, no repository scripts): checks out only the committed `package.json` and `deployments.json` of the package, downloads the tarball and checks its SHA-256. It requires the file name to be exactly `tari-project-wxtm-bridge-contracts-<tag version>.tgz`. The packed `package.json` must be byte-identical to the committed one (`npm pack` does not change it), so the build cannot add install scripts, dependencies or `bin`; its name must be `@tari-project/wxtm-bridge-contracts` and its version the tag's (read with `jq`). The packed `deployments.json` must be byte-identical to the committed file.
    - **Entry checks.** npm unpacks with node-tar, which differs from GNU tar: it strips any top-level directory, skips link entries, reads past a lone zero block and lets later duplicates win. So before extracting, the job lists the tarball with GNU tar `--ignore-zeros`, and fails if any tar call writes to stderr. It also fails unless:
      - every entry is a regular file or directory;
      - every path matches `package/[A-Za-z0-9._@/-]+`, with no `.` or `..` components;
      - no path appears twice, compared ignoring case and repeated slashes.
+   - **Plain ustar entries only.** The job accepts only plain ustar file and directory entries: no pax, GNU long-name or sparse headers, and nothing after a zero block. So GNU tar and node-tar (including older npm versions) read the same files. A second step checks this on the raw headers and with the node-tar bundled in npm (strict mode, nothing installed). That step requires node-tar's entry list to equal GNU tar's, in order, and its `package.json` and `deployments.json` bytes to equal the committed files.
    - With those rules, both tools see the same files.
 3. **publish** (GitHub environment `npm-publish`, `id-token: write`; needs build and check): no checkout and no install. It downloads that tarball, checks its exact tag-derived name and SHA-256, and runs `npm publish <tarball> --provenance --ignore-scripts`.
 

@@ -96,7 +96,7 @@ jobs:
           name: npm-package
           path: ${{ runner.temp }}/package/${{ steps.pack.outputs.tarball }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   # Checks the packed tarball without installing anything or running repository code: build ran dependency code
   # (hardhat plugins, typechain, tsc) after verify:wtari-package, so the packed contents are checked again here.
@@ -182,6 +182,133 @@ jobs:
           cmp "$work/x/package/deployments/deployments.json" "$COMMITTED_DEPLOYMENTS" ||
             fail "packed deployments.json differs from the committed one"
           echo "package $name@$packed matches the tag, and its package.json and deployments.json the committed files"
+
+      - name: "Setup Node ${{ env.NODE_VERSION }} (for npm's bundled node-tar only)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      # GNU tar and node-tar read pax, GNU long-name and sparse metadata differently, so only plain ustar
+      # file and directory headers are accepted. This step walks the raw headers itself, then parses the
+      # tarball with the node-tar bundled in npm (strict) and requires its entries to equal GNU tar's, in order,
+      # and its package.json and deployments.json bytes to equal the committed files. Nothing is installed and
+      # no repository code runs.
+      - name: "Check the package with npm's node-tar"
+        env:
+          TARBALL: ${{ needs.build.outputs.tarball }}
+          COMMITTED_PACKAGE: wxtm-bridge-contracts-typechain/package.json
+          COMMITTED_DEPLOYMENTS: wxtm-bridge-contracts-typechain/deployments/deployments.json
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/package/$TARBALL"
+          tar --ignore-zeros -tzf "$archive" > "$RUNNER_TEMP/gnu-paths" 2> "$RUNNER_TEMP/gnu-paths.err"
+          if [ -s "$RUNNER_TEMP/gnu-paths.err" ]; then
+            cat "$RUNNER_TEMP/gnu-paths.err"
+            echo "::error::tar wrote to stderr"
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/check-tar.js" << 'EOF'
+          'use strict'
+          const fs = require('fs')
+          const path = require('path')
+          const zlib = require('zlib')
+          const [archive, npmRoot, gnuPathsFile, committedPackage, committedDeployments] = process.argv.slice(2)
+          const problems = []
+          const fail = (message) => problems.push(message)
+
+          // Raw headers: plain ustar ('ustar\0' + '00'), typeflag '0' or '5', valid checksum, octal size, and no
+          // entry after a zero block (node-tar reads past a lone zero block).
+          const raw = zlib.gunzipSync(fs.readFileSync(archive))
+          const rawPaths = []
+          const octal = (h, start, end, what, offset) => {
+            const text = h.subarray(start, end).toString('latin1').replace(/^[ \0]+|[ \0]+$/g, '')
+            if (!/^[0-7]+$/.test(text)) fail(`header at ${offset}: ${what} ${JSON.stringify(text)} is not octal`)
+            return parseInt(text, 8)
+          }
+          const text = (h, start, end) => h.subarray(start, end).toString('utf8').replace(/\0.*$/s, '')
+          let offset = 0
+          let zeroBlock = false
+          while (offset + 512 <= raw.length) {
+            const h = raw.subarray(offset, offset + 512)
+            if (h.every((b) => b === 0)) {
+              zeroBlock = true
+              offset += 512
+              continue
+            }
+            if (zeroBlock) {
+              fail(`data after a zero block at ${offset}`)
+              break
+            }
+            const type = String.fromCharCode(h[156])
+            if (h.subarray(257, 265).toString('latin1') !== 'ustar\u000000') fail(`header at ${offset}: not plain ustar`)
+            if (type !== '0' && type !== '5') fail(`header at ${offset}: type ${JSON.stringify(type)} is not '0' or '5'`)
+            let sum = 0
+            for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 32 : h[i]
+            if (octal(h, 148, 156, 'checksum', offset) !== sum) fail(`header at ${offset}: bad checksum`)
+            const size = octal(h, 124, 136, 'size', offset)
+            const name = text(h, 0, 100)
+            const prefix = text(h, 345, 500)
+            rawPaths.push(prefix ? `${prefix}/${name}` : name)
+            offset += 512 + Math.ceil(size / 512) * 512
+            if (!Number.isSafeInteger(size) || offset > raw.length) {
+              fail(`header at ${offset}: entry runs past the end of the archive`)
+              break
+            }
+          }
+
+          // npm's own parser, strict: any warning, meta (pax or long-name) or ignored entry fails.
+          const tar = require(path.join(npmRoot, 'npm', 'node_modules', 'tar'))
+          const wanted = { 'package/package.json': [], 'package/deployments/deployments.json': [] }
+          const nodePaths = []
+          const parser = new tar.Parser({
+            strict: true,
+            onReadEntry: (entry) => {
+              nodePaths.push(entry.path)
+              if (entry.header.typeKey !== '0' && entry.header.typeKey !== '5') {
+                fail(`node-tar entry ${entry.path}: type ${entry.header.typeKey}`)
+              }
+              if (Object.prototype.hasOwnProperty.call(wanted, entry.path)) {
+                entry.on('data', (chunk) => wanted[entry.path].push(chunk))
+              } else {
+                entry.resume()
+              }
+            },
+          })
+          parser.on('warn', (code, message) => fail(`node-tar warning ${code}: ${message}`))
+          parser.on('error', (error) => fail(`node-tar error: ${error.message}`))
+          parser.on('meta', () => fail('node-tar read a pax or long-name meta entry'))
+          parser.on('ignoredEntry', (entry) => fail(`node-tar ignored entry ${entry.path} (${entry.type})`))
+          let finished = false
+          const finish = () => {
+            if (finished) return
+            finished = true
+            const gnuPaths = fs.readFileSync(gnuPathsFile, 'utf8').split('\n').filter((line) => line !== '')
+            const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i])
+            if (!same(nodePaths, gnuPaths)) fail('node-tar and GNU tar list different entries')
+            if (!same(rawPaths, gnuPaths)) fail('raw headers and GNU tar list different entries')
+            for (const [file, committed] of [
+              ['package/package.json', committedPackage],
+              ['package/deployments/deployments.json', committedDeployments],
+            ]) {
+              if (!Buffer.concat(wanted[file]).equals(fs.readFileSync(committed))) {
+                fail(`node-tar's ${file} differs from the committed file`)
+              }
+            }
+            for (const problem of problems) console.log(`::error::${problem}`)
+            if (problems.length > 0) process.exit(1)
+            console.log(`node-tar, GNU tar and the raw headers agree on ${nodePaths.length} plain ustar entries`)
+          }
+          parser.on('end', finish)
+          // If node-tar stops on an error without ending, still report (and fail) instead of exiting 0.
+          process.on('beforeExit', () => {
+            if (!finished) fail('node-tar did not finish parsing')
+            finish()
+          })
+          parser.end(fs.readFileSync(archive))
+          EOF
+          node "$RUNNER_TEMP/check-tar.js" "$archive" "$(npm root -g)" "$RUNNER_TEMP/gnu-paths" \
+            "$COMMITTED_PACKAGE" "$COMMITTED_DEPLOYMENTS"
 
   # Publishes the exact tarball built and checked above: no checkout, no install, no project scripts.
   publish:
