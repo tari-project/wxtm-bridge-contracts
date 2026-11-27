@@ -13,11 +13,16 @@
    - **Entry checks.** npm unpacks with node-tar, which differs from GNU tar: it strips any top-level directory, skips link entries, reads past a lone zero block and lets later duplicates win. So before extracting, the job lists the tarball with GNU tar `--ignore-zeros`, and fails if any tar call writes to stderr. It also fails unless:
      - every entry is a regular file or directory;
      - every path matches `package/[A-Za-z0-9._@/-]+`, with no `.` or `..` components;
-     - every path is in the package's `files` list or npm's automatic files (`package.json`, `README.md`, `CHANGELOG.md`). Anything else fails, for example a `binding.gyp` (from which npm would infer an install script), `server.js`, `npm-shrinkwrap.json` or `.npmrc`. `package.json` also sets `"gypfile": false`;
+     - every path is on an allowlist that is narrower than the package's `files` list: `package.json`, `README.md`, `CHANGELOG.md`, `index.(js|d.ts)`, `deployments/deployments.json`, `deployments/index.(js|d.ts)`, `utils/chain.(js|d.ts)` and `typechain/**.(js|d.ts)`, with no `node_modules` segment. **When adding a file to the package, add it to this allowlist in `npm-publish.yml` too; otherwise the release fails closed.** Anything else fails, for example a `binding.gyp` (from which npm would infer an install script), `server.js`, `npm-shrinkwrap.json` or `.npmrc`. `package.json` also sets `"gypfile": false`;
      - no path appears twice, compared ignoring case and repeated slashes.
    - **Plain ustar entries only.** The job accepts only plain ustar file and directory entries: no pax, GNU long-name or sparse headers, and nothing after a zero block. So GNU tar and node-tar (including older npm versions) read the same files. A second step checks this on the raw headers and with the node-tar bundled in npm (strict mode, nothing installed). That step parses size and other numeric header fields strictly. It requires node-tar's entry list and entry sizes to equal GNU tar's and the raw headers', in order, and every file node-tar reads to be byte-identical to GNU tar's extraction (with the same set of files). `package.json` and `deployments.json` must also equal the committed files.
    - With those rules, both tools see the same files. The step also logs the Node, npm and node-tar versions it used.
-   - **Exact-match check.** The job runs `packageDeploymentProblems` from `utils/deployments-manifest.ts` (Node builtins only, run with Node's type stripping, nothing installed). So the packed `deployments.json` must hold exactly the committed `deployments/<network>/*.json` records, checked outside the build job.
+   - **Exact-match check.** The job runs `packageDeploymentProblems` and `wtariStartBlockProblems` from `utils/deployments-manifest.ts` (Node builtins only, run with Node's type stripping, nothing installed). So, checked outside the build job:
+     - the packed `deployments.json` must hold exactly the committed `deployments/<network>/*.json` records;
+     - every chain with wTARI keys must have exactly the wTARI record set, and a `wTARIBridgeStartBlock` equal to `deploy/wtari/<chainId>.json`'s `bridgeStartBlock`.
+
+     **Residual:** the wTARI CREATE2 address recomputation needs hardhat, so it runs only in the build job and is advisory.
+
    - **Approver evidence.** Only once every check has passed does the last step print the verified SHA-256 and the GNU tar file listing to the log and the job summary.
 3. **publish** (GitHub environment `npm-publish`, `id-token: write`; needs build and check): no checkout and no install. It downloads that tarball, checks its exact tag-derived name and SHA-256, and runs `npm publish <tarball> --provenance --ignore-scripts`.
 
@@ -37,7 +42,8 @@ The tag, `development` and version checks inside the workflow run from the tagge
   - **Deployment branches and tags** set to **Selected branches and tags**, with only the tag rule `@tari-project/wxtm-bridge-contracts@v*` and no branch rules;
   - **Required reviewers** with **Prevent self-review** enabled.
 - A tag ruleset targeting `@tari-project/wxtm-bridge-contracts@v*` that restricts creations, updates and deletions to maintainers, with a minimal bypass list.
-- A `CODEOWNERS` file that requires maintainer review for `deployments/**`, `wxtm-bridge-contracts-typechain/deployments/deployments.json` and `.github/workflows/`, enforced by branch protection on `development`.
+- A `CODEOWNERS` file that requires maintainer review for everything that shapes the package or its checks: `wxtm-bridge-contracts-typechain/**`, `deployments/**`, `deploy/wtari/**`, `utils/deployments-manifest.ts`, `tasks/wtari.ts`, `scripts/copy.sh`, `scripts/build/**`, the root `package.json`, `package-lock.json`, `hardhat.config.ts` and `.github/workflows/`.
+- Branch protection on `development`: **Require review from Code Owners**, **Require approval of the most recent reviewable push**, and **Do not allow bypassing the above settings**.
 - An npm trusted publisher for `@tari-project/wxtm-bridge-contracts` bound to this repository, the workflow `npm-publish.yml`, and the environment `npm-publish`. **Before merging the PR that adds `npm-publish.yml`, switch the existing entry from `publish.yml` to `npm-publish.yml`.** This switch stops the older `publish.yml` copies on old tags and commits from publishing through OIDC.
 - On npm, the package's **Settings → Publishing access** set to **Require two-factor authentication and disallow tokens**, so only the trusted publisher can publish. Also revoke existing publish-capable granular or automation tokens, and keep the package's maintainer list minimal.
 - Squash-merge this PR, and in general any release PR that changes `npm-publish.yml`. A merge commit would bring its intermediate commits onto `development`; they carry older or weaker workflows, and a tag on one of them would pass the ancestry check.
@@ -59,16 +65,24 @@ The tag, `development` and version checks inside the workflow run from the tagge
 
 3. Before approving the `npm-publish` environment, the reviewer checks the release independently. The checks inside the workflow are advisory, because the tagged commit supplies them.
    - The run is for a version tag (`@tari-project/wxtm-bridge-contracts@vX.Y.Z`), not a branch.
-   - The tagged commit is on `development`, and its `npm-publish.yml` equals `development`'s at approval time:
+   - The tagged commit is on `development`, its `npm-publish.yml` equals `development`'s at approval time, and it is this release's version-bump (squash-merge) commit:
 
      ```sh
      git fetch origin --tags
      sha=$(git rev-parse "@tari-project/wxtm-bridge-contracts@v0.3.0^{commit}")
      git merge-base --is-ancestor "$sha" origin/development && echo on-development
      git diff --exit-code "$sha" origin/development -- .github/workflows/npm-publish.yml && echo same-workflow
+     git log -1 --format='%H %s' "$sha"
      ```
 
    - The run's commit SHA (shown on the run page) equals that `$sha`.
+
+   - The approver reviews everything that changed in the package and its checks since the previous release tag, not just the version bump:
+
+     ```sh
+     git diff "@tari-project/wxtm-bridge-contracts@v0.2.1" "$sha" -- wxtm-bridge-contracts-typechain deployments \
+       deploy/wtari utils/deployments-manifest.ts tasks/wtari.ts .github/workflows/npm-publish.yml
+     ```
 
    - The check job passed. Its log and summary show the verified SHA-256 and the packed file list, and the list is as expected. The build job's log and summary come from a job that runs dependency code, so they are not evidence.
 
@@ -80,4 +94,10 @@ The tag, `development` and version checks inside the workflow run from the tagge
 
 ### For consumers
 
-Pin an exact version. Verify provenance with `npm audit signatures`. The package's attestation should name the workflow `npm-publish.yml`, run on a `@tari-project/wxtm-bridge-contracts@v*` tag of this repository.
+Pin an exact version, and run `npm audit signatures`. That command does not fail when a package has no attestation, and it does not check the workflow or ref. So also confirm that the version has a provenance attestation, and that its SLSA predicate names this repository, `.github/workflows/npm-publish.yml` and a `refs/tags/@tari-project/wxtm-bridge-contracts@v*` ref. Check it on the npmjs.com provenance panel, or:
+
+```sh
+url=$(npm view @tari-project/wxtm-bridge-contracts@0.3.0 dist.attestations.url)
+curl -s "$url" | jq -r '.attestations[] | select(.predicateType == "https://slsa.dev/provenance/v1")
+  | .bundle.dsseEnvelope.payload' | base64 -d | jq '.predicate.buildDefinition.externalParameters.workflow'
+```

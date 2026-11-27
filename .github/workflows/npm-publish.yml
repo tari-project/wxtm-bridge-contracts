@@ -116,6 +116,7 @@ jobs:
             wxtm-bridge-contracts-typechain/README.md
             wxtm-bridge-contracts-typechain/CHANGELOG.md
             /deployments/
+            /deploy/wtari/
             /utils/deployments-manifest.ts
           sparse-checkout-cone-mode: false
 
@@ -369,24 +370,29 @@ jobs:
             "$RUNNER_TEMP/gnu-extract" "$COMMITTED_PACKAGE" "$COMMITTED_DEPLOYMENTS"
 
       # The D1 exact-match check again, outside the build job (which runs dependency code): the packed
-      # deployments.json must hold exactly the committed deployments/<network>/*.json records. This runs one
-      # repository file, utils/deployments-manifest.ts from the tagged commit (Node builtins only), with Node's
-      # type stripping; nothing is installed.
+      # deployments.json must hold exactly the committed deployments/<network>/*.json records, and every chain
+      # with wTARI keys exactly the wTARI record set and deploy/wtari/<chainId>.json's bridgeStartBlock. This runs
+      # one repository file, utils/deployments-manifest.ts from the tagged commit (Node builtins only), with
+      # Node's type stripping; nothing is installed. The CREATE2 address recomputation runs only in the build job.
       - name: "Check deployments.json against deployments/<network>"
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/check-manifest.mts" << 'EOF'
           import { readFileSync } from 'node:fs'
           import { pathToFileURL } from 'node:url'
-          const [modulePath, manifestFile, deploymentsDir] = process.argv.slice(2)
-          const { packageDeploymentProblems } = await import(pathToFileURL(modulePath).href)
-          const problems = packageDeploymentProblems(JSON.parse(readFileSync(manifestFile, 'utf8')), deploymentsDir)
+          const [modulePath, manifestFile, deploymentsDir, wtariConfigDir] = process.argv.slice(2)
+          const { packageDeploymentProblems, wtariStartBlockProblems } = await import(pathToFileURL(modulePath).href)
+          const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
+          const problems = [
+            ...packageDeploymentProblems(manifest, deploymentsDir),
+            ...wtariStartBlockProblems(manifest, wtariConfigDir),
+          ]
           for (const problem of problems) console.log(`::error::${problem}`)
           if (problems.length > 0) process.exit(1)
-          console.log('packed deployments.json matches deployments/<network> exactly')
+          console.log('packed deployments.json matches deployments/<network> and the deploy/wtari start blocks')
           EOF
           node "$RUNNER_TEMP/check-manifest.mts" "$PWD/utils/deployments-manifest.ts" \
-            "$RUNNER_TEMP/gnu-extract/package/deployments/deployments.json" "$PWD/deployments"
+            "$RUNNER_TEMP/gnu-extract/package/deployments/deployments.json" "$PWD/deployments" "$PWD/deploy/wtari"
 
       # Runs only if every check above passed. Approvers use this job's log and summary, not the build job's.
       - name: "Record the checked package for the approver"
