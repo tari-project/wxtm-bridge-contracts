@@ -8,6 +8,7 @@ Built and published by `.github/workflows/npm-publish.yml` (renamed from `publis
 
 - **Base Sepolia (84532) no longer has `wXTMBridge`.** 0.2.0 and 0.2.1 shipped `0x52610316B50238d0f6259691762179A3d8E87908`, a retired testnet bridge with no deployment record.
 - **`WxtmChain` no longer includes 84532.** It is now `1 | 11155111`. `getDeployments(84532)` has its own overload (`WxtmChainWithoutBridge`), which returns `wXTMBridge?: undefined`. Code that reads `getDeployments(84532).wXTMBridge` as an address no longer compiles.
+- **A union chain id gets `Partial<Deployments>`.** A caller passing a union such as `1 | 84532` to `getDeployments` matches neither specific overload, so it gets `Partial<Deployments>`: `wXTM`, `wXTMBridge` and `wXTMController` become optional.
 - **`DefaultProxyAdmin` changed on all three chains.** 0.2.0 and 0.2.1 shipped LayerZero's `DefaultProxyAdmin` instead of ours:
   - mainnet: `0x67d3d893ce36D9628B82Be2860Cd5c021227B3bE` (was `0x87D8Ee0bAe7d352bc05C90B2d3fA3467D6c2357b`);
   - Sepolia: `0x9955F709e17c7476904CaF3229061db938CE71Bf` (was `0xe4BA40cF8A8B9d0FefC76Dc594A58AEDa574Cb45`);

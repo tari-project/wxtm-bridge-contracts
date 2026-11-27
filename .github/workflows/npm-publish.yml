@@ -113,6 +113,8 @@ jobs:
           sparse-checkout: |
             wxtm-bridge-contracts-typechain/package.json
             wxtm-bridge-contracts-typechain/deployments/deployments.json
+            wxtm-bridge-contracts-typechain/README.md
+            wxtm-bridge-contracts-typechain/CHANGELOG.md
           sparse-checkout-cone-mode: false
 
       - name: "Download package"
@@ -128,6 +130,7 @@ jobs:
           SHA256: ${{ needs.build.outputs.sha256 }}
           COMMITTED_PACKAGE: wxtm-bridge-contracts-typechain/package.json
           COMMITTED_DEPLOYMENTS: wxtm-bridge-contracts-typechain/deployments/deployments.json
+          COMMITTED_DIR: wxtm-bridge-contracts-typechain
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -170,6 +173,8 @@ jobs:
           # Passed via ENVIRON: awk -v would process the backslash escapes.
           bad=$(ALLOWED="$allowed" LC_ALL=C awk '$0 !~ ENVIRON["ALLOWED"]' "$work/paths")
           [ -z "$bad" ] || fail "tarball has entries outside the package's files list: $bad"
+          bad=$(awk '/(^|\/)node_modules(\/|$)/' "$work/paths")
+          [ -z "$bad" ] || fail "tarball has node_modules entries: $bad"
           bad=$(awk '/(^|\/)\.\.?(\/|$)/' "$work/paths")
           [ -z "$bad" ] || fail "tarball has . or .. path components: $bad"
           duplicates=$(sed 's://*:/:g; s:/*$::' "$work/paths" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort | LC_ALL=C uniq -d)
@@ -193,6 +198,10 @@ jobs:
           [ "$packed" = "$version" ] || fail "package version $packed is not the tag's $version"
           cmp "$extract/package/deployments/deployments.json" "$COMMITTED_DEPLOYMENTS" ||
             fail "packed deployments.json differs from the committed one"
+          for file in README.md CHANGELOG.md; do
+            [ -f "$extract/package/$file" ] && [ ! -L "$extract/package/$file" ] || fail "package/$file is missing"
+            cmp "$extract/package/$file" "$COMMITTED_DIR/$file" || fail "packed $file differs from the committed one"
+          done
           echo "package $name@$packed matches the tag, and its package.json and deployments.json the committed files"
 
       - name: "Setup Node ${{ env.NODE_VERSION }} (for npm's bundled node-tar only)"
