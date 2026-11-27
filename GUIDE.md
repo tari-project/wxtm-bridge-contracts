@@ -7,6 +7,26 @@
 `npx hardhat lz:deploy`
 `yarn hardhat lz:deploy --tags wXTMController`
 
+#### **Upgrade wXTMBridge or wXTMController**
+
+The deploy scripts only deploy new proxies. For a proxy that is already recorded they deploy nothing: wXTM is left
+alone, and wXTMBridge/wXTMController are only checked (upgraded and set up). Upgrades go through this task:
+
+1. `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --deploy-implementation` deploys the
+   CREATE2 implementation (same salt as the deploy scripts) from the deployer and prints the `upgradeAndCall`
+   transaction for the ProxyAdmin owner to sign.
+2. After it is executed, `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --check`
+   verifies the upgrade and records it in `deployments/mainnet`.
+
+**Before signing**, a second person first confirms that the printed commit is the reviewed one: the commit recorded in
+the reviewed PR, and on the protected default branch (`git fetch && git merge-base --is-ancestor <commit>
+origin/development`; the task also prints the remote branches containing it). A reproducible build of an unreviewed
+commit proves nothing. Then they check out that commit (ideally in the SEC-06 reproducible build image) and run the
+task in print mode (no flags, read-only; it compiles first and needs no deployer key) against the same network, and
+confirm the same commit, init-code hash, CREATE2 factory/salt and implementation address, and calldata; that the
+implementation has the compiled code (the task refuses otherwise); and that the admin and the guardian Safe (its
+owners and threshold) match the published addresses. Only then sign.
+
 #### **Verify**
 
 `npx hardhat run scripts/verify.ts --network sepolia-testnet`

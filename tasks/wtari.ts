@@ -1,11 +1,6 @@
 import fs from 'fs'
 import path from 'path'
 
-import {
-    getCompatibilityFallbackHandlerDeployments,
-    getSafeL2SingletonDeployments,
-    getSafeSingletonDeployments,
-} from '@safe-global/safe-deployments'
 import { Contract, ethers, providers } from 'ethers'
 import { task, types } from 'hardhat/config'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
@@ -14,6 +9,8 @@ import TransparentUpgradeableProxy from 'hardhat-deploy/extendedArtifacts/Transp
 
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
+
+import { checkHasCode, checkSafe } from '../utils/safe'
 
 export interface WtariChainConfig {
     // Hardhat network for this chain; hardhat.config.ts adds it unless defined there by hand.
@@ -59,25 +56,6 @@ export const REFERENCE_SAFES: { [chainId: number]: { mintLowSafe: string; mintHi
 // Chains that are always production, whatever the config says.
 const MAINNET_CHAIN_IDS = [1, 8453, 10, 42161, 137, 56, 43114]
 
-const SAFE_ABI = [
-    'function getOwners() view returns (address[])',
-    'function getThreshold() view returns (uint256)',
-    'function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)',
-]
-const SAFE_VERSIONS = ['1.3.0', '1.4.1', '1.5.0']
-// keccak256 of the SafeProxy runtime code each official factory deploys. v1.3.0 from the factories'
-// proxyRuntimeCode(); v1.4.1 and v1.5.0 by simulating proxyCreationCode() (v1.4.1 matches the reference Safes).
-const SAFE_PROXY_CODE_HASHES = [
-    '0xb89c1b3bdf2cf8827818646bce9a8f6e372885f8c55e5c07acbd307cb133b000', // v1.3.0
-    '0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c', // v1.4.1
-    '0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f', // v1.5.0
-]
-const SAFE_SENTINEL = '0x0000000000000000000000000000000000000001'
-const SAFE_FALLBACK_HANDLER_SLOT = ethers.utils.id('fallback_manager.handler.address')
-const SAFE_GUARD_SLOT = ethers.utils.id('guard_manager.guard.address')
-// v1.5.0 only; always zero on older versions.
-const SAFE_MODULE_GUARD_SLOT = ethers.utils.id('module_manager.module_guard.address')
-
 const PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
 const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
 const MINTER_ROLE = ethers.utils.id('MINTER_ROLE')
@@ -106,45 +84,6 @@ const LOG_BLOCK_RANGE = 10_000
 const MIN_LOG_BLOCK_RANGE = 100
 // Emitted by a Safe (v1.3+) for every successful Safe transaction.
 const SAFE_EXECUTION_SUCCESS = ethers.utils.id('ExecutionSuccess(bytes32,uint256)')
-
-/** Official Safe and SafeL2 singletons for `chainId`, from @safe-global/safe-deployments (lowercase). */
-export function safeSingletons(chainId: number): string[] {
-    // The local hardhat network is not listed; it uses Ethereum mainnet's set.
-    const network = chainId === 31337 ? '1' : String(chainId)
-    const singletons: string[] = []
-    for (const version of SAFE_VERSIONS) {
-        for (const deployment of [
-            getSafeSingletonDeployments({ version }),
-            getSafeL2SingletonDeployments({ version }),
-        ]) {
-            const addresses = deployment?.networkAddresses[network] ?? []
-            for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
-                singletons.push(address.toLowerCase())
-            }
-        }
-    }
-    return singletons
-}
-
-/**
- * Official CompatibilityFallbackHandler deployments for `chainId`, from @safe-global/safe-deployments (lowercase).
- * Safe's FallbackManager CALLs the handler for unknown selectors with the Safe as msg.sender, so only the
- * official CompatibilityFallbackHandler (whose functions only read the Safe, or simulate and revert) is allowed.
- * ExtensibleFallbackHandler is excluded because it can delegate calls and EIP-1271 verification to custom
- * handler contracts; TokenCallbackHandler is excluded because standard Safe setups never use it.
- */
-export function safeFallbackHandlers(chainId: number): string[] {
-    const network = chainId === 31337 ? '1' : String(chainId)
-    const handlers: string[] = []
-    for (const version of SAFE_VERSIONS) {
-        const deployment = getCompatibilityFallbackHandlerDeployments({ version })
-        const addresses = deployment?.networkAddresses[network] ?? []
-        for (const address of Array.isArray(addresses) ? addresses : [addresses]) {
-            handlers.push(address.toLowerCase())
-        }
-    }
-    return handlers
-}
 
 const CONFIG_DIR = path.join(__dirname, '..', 'deploy', 'wtari')
 
@@ -207,76 +146,6 @@ export function listWtariConfigs(): [number, WtariChainConfig][] {
     return configs
 }
 
-async function checkHasCode(provider: providers.Provider, label: string, address: string) {
-    if ((await provider.getCode(address)) === '0x') {
-        throw new Error(`${label} ${address} has no code on the target chain`)
-    }
-}
-
-/**
- * Official SafeProxy code, official singleton, official or zero fallback handler, no modules, no guards;
- * owners/threshold equal to the reference Safe if given. Returns the threshold.
- */
-async function checkSafe(
-    provider: providers.Provider,
-    label: string,
-    safe: string,
-    referenceProvider?: providers.Provider,
-    referenceSafe?: string
-) {
-    await checkHasCode(provider, label, safe)
-    if (!SAFE_PROXY_CODE_HASHES.includes(ethers.utils.keccak256(await provider.getCode(safe)))) {
-        throw new Error(`${label} ${safe} is not an official SafeProxy (runtime code hash mismatch)`)
-    }
-    const target = new Contract(safe, SAFE_ABI, provider)
-
-    const singleton = ethers.utils.hexDataSlice(await provider.getStorageAt(safe, 0), 12)
-    const { chainId } = await provider.getNetwork()
-    if (!safeSingletons(chainId).includes(singleton.toLowerCase())) {
-        throw new Error(`${label} ${safe} singleton ${singleton} is not an official Safe singleton on chain ${chainId}`)
-    }
-    // Zero is allowed deliberately: FallbackManager then returns without calling anything.
-    const fallbackSlot = await provider.getStorageAt(safe, SAFE_FALLBACK_HANDLER_SLOT)
-    if (!ethers.BigNumber.from(ethers.utils.hexDataSlice(fallbackSlot, 0, 12)).isZero()) {
-        throw new Error(`${label} ${safe} fallback handler slot ${fallbackSlot} is not a clean address`)
-    }
-    const fallbackHandler = ethers.utils.hexDataSlice(fallbackSlot, 12)
-    if (
-        fallbackHandler !== ethers.constants.AddressZero &&
-        !safeFallbackHandlers(chainId).includes(fallbackHandler.toLowerCase())
-    ) {
-        throw new Error(
-            `${label} ${safe} fallback handler ${fallbackHandler} is not an official Safe fallback handler on chain ${chainId}`
-        )
-    }
-    const [modules] = await target.getModulesPaginated(SAFE_SENTINEL, 10)
-    if (modules.length > 0) {
-        throw new Error(`${label} ${safe} has modules enabled: ${modules.join(', ')}`)
-    }
-    if (!ethers.BigNumber.from(await provider.getStorageAt(safe, SAFE_GUARD_SLOT)).isZero()) {
-        throw new Error(`${label} ${safe} has a transaction guard set`)
-    }
-    if (!ethers.BigNumber.from(await provider.getStorageAt(safe, SAFE_MODULE_GUARD_SLOT)).isZero()) {
-        throw new Error(`${label} ${safe} has a module guard set`)
-    }
-
-    const threshold = await target.getThreshold()
-    if (!referenceProvider || !referenceSafe) return threshold
-    const reference = new Contract(referenceSafe, SAFE_ABI, referenceProvider)
-    const owners = (await target.getOwners()).map((a: string) => a.toLowerCase()).sort()
-    const referenceOwners = (await reference.getOwners()).map((a: string) => a.toLowerCase()).sort()
-    if (owners.join(',') !== referenceOwners.join(',')) {
-        throw new Error(`${label} ${safe} owners differ from reference Safe ${referenceSafe}`)
-    }
-    const referenceThreshold = await reference.getThreshold()
-    if (!threshold.eq(referenceThreshold)) {
-        throw new Error(
-            `${label} ${safe} threshold ${threshold} differs from reference Safe threshold ${referenceThreshold}`
-        )
-    }
-    return threshold
-}
-
 async function checkSafes(
     provider: providers.Provider,
     referenceProvider: providers.Provider,
@@ -289,7 +158,7 @@ async function checkSafes(
     }
     await checkSafe(provider, 'mintLowSafe', config.mintLowSafe, referenceProvider, reference.mintLowSafe)
     await checkSafe(provider, 'mintHighSafe', config.mintHighSafe, referenceProvider, reference.mintHighSafe)
-    const adminThreshold = await checkSafe(provider, 'proxyAdminOwner', config.proxyAdminOwner)
+    const { threshold: adminThreshold } = await checkSafe(provider, 'proxyAdminOwner', config.proxyAdminOwner)
 
     const low = config.mintLowSafe.toLowerCase()
     const high = config.mintHighSafe.toLowerCase()
