@@ -5,7 +5,13 @@ import path from 'path'
 
 import { expect } from 'chai'
 
-import { readManifest, updateManifestEntry, withFileLock } from '../../utils/deployments-manifest'
+import {
+    localDeploymentAddresses,
+    packageDeploymentProblems,
+    readManifest,
+    updateManifestEntry,
+    withFileLock,
+} from '../../utils/deployments-manifest'
 
 const ROOT = path.join(__dirname, '..', '..')
 const MODULE = path.join(ROOT, 'utils', 'deployments-manifest.ts')
@@ -109,5 +115,76 @@ describe('export-deployments manifest writes', function () {
         }
         expect(error?.message).to.include('Timed out waiting for')
         expect(fs.readFileSync(lock, 'utf8')).to.equal(`${process.pid}:${os.hostname()}:live`)
+    })
+})
+
+describe('package deployments.json against deployments/<network>', function () {
+    const A = '0x' + '1'.repeat(40)
+    const B = '0x' + '2'.repeat(40)
+    const C = '0x' + '3'.repeat(40)
+    let dir: string
+    function network(name: string, chainId: string, records: { [name: string]: string }) {
+        const networkDir = path.join(dir, name)
+        fs.mkdirSync(path.join(networkDir, 'solcInputs'), { recursive: true })
+        fs.writeFileSync(path.join(networkDir, '.chainId'), chainId)
+        fs.writeFileSync(path.join(networkDir, 'notes.md'), 'not a record')
+        for (const [record, address] of Object.entries(records)) {
+            fs.writeFileSync(path.join(networkDir, `${record}.json`), JSON.stringify({ address, abi: [] }))
+        }
+    }
+    beforeEach(function () {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wtari-package-'))
+        network('mainnet', '1', { DefaultProxyAdmin: A, wXTM: B })
+        network('base-sepolia-testnet', '84532', { wXTM: B, wTARI: C })
+        // A directory without .chainId (like a checklist folder) is not a chain.
+        fs.mkdirSync(path.join(dir, 'docs'))
+    })
+    afterEach(function () {
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('reads only the record files of a network directory', function () {
+        expect(localDeploymentAddresses(path.join(dir, 'mainnet'))).to.deep.equal({ DefaultProxyAdmin: A, wXTM: B })
+    })
+
+    it('accepts an exact match plus wTARIBridgeStartBlock', function () {
+        const manifest = {
+            1: { DefaultProxyAdmin: A, wXTM: B },
+            84532: { wXTM: B, wTARI: C, wTARIBridgeStartBlock: 5 },
+        }
+        expect(packageDeploymentProblems(manifest, dir)).to.deep.equal([])
+    })
+
+    it('reports a changed address, extra and missing keys, and missing or unknown chains', function () {
+        const manifest = {
+            // LayerZero's DefaultProxyAdmin overriding ours, and an external LayerZero record.
+            1: { DefaultProxyAdmin: C, wXTM: B, EndpointV2: A },
+            // A retired record whose deployment file is gone.
+            84532: { wXTM: B, wXTMBridge: A },
+            8453: { wXTM: B },
+        }
+        expect(packageDeploymentProblems(manifest, dir)).to.deep.equal([
+            `chain 1: DefaultProxyAdmin is ${C}, deployments/mainnet has ${A}`,
+            `chain 1: EndpointV2 has no deployments/mainnet/EndpointV2.json`,
+            `chain 84532: missing wTARI`,
+            `chain 84532: wXTMBridge has no deployments/base-sepolia-testnet/wXTMBridge.json`,
+            `chain 8453: no deployments/<network> directory with this .chainId`,
+        ])
+        expect(packageDeploymentProblems({ 1: { DefaultProxyAdmin: A, wXTM: B } }, dir)).to.deep.equal([
+            'chain 84532: missing from the package (deployments/base-sepolia-testnet exists)',
+        ])
+    })
+
+    it('rejects two deployment directories for one chain', function () {
+        network('mainnet-copy', '1', { wXTM: B })
+        const problems = packageDeploymentProblems({ 1: { wXTM: B } }, dir)
+        expect(problems).to.include('chain 1: several deployment directories (mainnet, mainnet-copy)')
+    })
+
+    it('holds for the committed package deployments.json', function () {
+        const manifest = readManifest<{ [key: string]: string | number }>(
+            path.join(ROOT, 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+        )
+        expect(packageDeploymentProblems(manifest, path.join(ROOT, 'deployments'))).to.deep.equal([])
     })
 })

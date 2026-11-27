@@ -15,6 +15,8 @@ import TransparentUpgradeableProxy from 'hardhat-deploy/extendedArtifacts/Transp
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
+import { packageDeploymentProblems } from '../utils/deployments-manifest'
+
 export interface WtariChainConfig {
     // Hardhat network for this chain; hardhat.config.ts adds it unless defined there by hand.
     network: { name: string; rpcUrlEnv: string; defaultRpcUrl: string; eid: number }
@@ -1315,7 +1317,7 @@ export type ExportedEntry = { [key: string]: string | number }
  * WTARI_RECORD_NAMES set: unchanged addresses keep what was exported (and checked) before; new or changed
  * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. When the set
  * is incomplete, has unexpected wTARI* records, or fails the check, the last good (previously exported) set
- * is kept. Other records are always exported.
+ * is kept. Other records are exported exactly as in `addresses`; earlier non-wTARI keys are not kept.
  */
 export async function exportedChainEntry(
     previous: ExportedEntry,
@@ -1324,10 +1326,9 @@ export async function exportedChainEntry(
     configuredStartBlock: number | undefined,
     check: () => Promise<number>
 ) {
+    // Non-wTARI records come only from `addresses`: nothing else is carried over from the previous file, so a
+    // record whose deployment file was removed (or an external one exported earlier) drops out.
     const entry: ExportedEntry = {}
-    for (const [key, value] of Object.entries(previous)) {
-        if (!key.startsWith('wTARI')) entry[key] = value
-    }
     const wtariAddresses: ExportedEntry = {}
     for (const [name, address] of Object.entries(addresses)) {
         if (name.startsWith('wTARI')) wtariAddresses[name] = address
@@ -1544,11 +1545,16 @@ task('check:wtari', 'Check wTARI Safes, roles, ownership, LZ config, bytecode an
         }
     )
 
-task('verify:wtari-package', 'Offline check of the wTARI entries in the package deployments.json (no RPC)').setAction(
-    async (_args, hre) => {
-        const file = path.join(__dirname, '..', 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
-        const problems = await wtariPackageProblems(hre, JSON.parse(fs.readFileSync(file, 'utf8')))
-        if (problems.length > 0) throw new Error(`wTARI package entries are invalid:\n${problems.join('\n')}`)
-        console.log('wTARI package entries match the recomputed CREATE2 addresses')
-    }
-)
+task(
+    'verify:wtari-package',
+    'Offline check of the package deployments.json against deployments/<network> and the wTARI CREATE2 addresses (no RPC)'
+).setAction(async (_args, hre) => {
+    const file = path.join(__dirname, '..', 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const problems = [
+        ...packageDeploymentProblems(manifest, path.join(__dirname, '..', 'deployments')),
+        ...(await wtariPackageProblems(hre, manifest)),
+    ]
+    if (problems.length > 0) throw new Error(`package deployments.json is invalid:\n${problems.join('\n')}`)
+    console.log('package deployments.json matches deployments/<network> and the recomputed wTARI CREATE2 addresses')
+})

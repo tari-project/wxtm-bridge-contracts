@@ -1207,6 +1207,14 @@ describe('export-deployments wTARI gate', function () {
         expect(wtariFailed).to.equal(false)
     })
 
+    it('drops non-wTARI keys of the previous entry that are not in the current deployment records', async function () {
+        // A retired bridge and an external (LayerZero) record exported earlier, plus a stale DefaultProxyAdmin.
+        const previous = { ...wxtm, wXTMBridge: '0x03', EndpointV2: '0x04', DefaultProxyAdmin: '0x05' }
+        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
+        expect(entry).to.deep.equal(wxtm)
+        expect(wtariFailed).to.equal(false)
+    })
+
     it('exports a new wTARI set only after the check passes, with the proven start block', async function () {
         const { entry, wtariFailed } = await exportedChainEntry({}, { ...wxtm, ...wtari }, 123, passing)
         expect(entry).to.deep.equal({ ...wxtm, ...wtari, wTARIBridgeStartBlock: 123 })
@@ -1278,5 +1286,12 @@ describe('typechain package deployments', function () {
         // @ts-expect-error Base has no wXTM, so getDeployments(8453).wXTM is WagmiAddress | undefined.
         const base: WagmiAddress = getDeployments(8453).wXTM
         expect(base).to.equal(undefined)
+
+        // Base Sepolia keeps wXTM but has no wXTMBridge (the stale testnet bridge is no longer exported).
+        const baseSepoliaWxtm: WagmiAddress = getDeployments(84532).wXTM
+        expect(baseSepoliaWxtm).to.equal('0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374')
+        // @ts-expect-error getDeployments(84532).wXTMBridge is undefined.
+        const baseSepoliaBridge: WagmiAddress = getDeployments(84532).wXTMBridge
+        expect(baseSepoliaBridge).to.equal(undefined)
     })
 })

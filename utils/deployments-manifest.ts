@@ -162,3 +162,77 @@ export async function updateManifestEntry<T>(
         options
     )
 }
+
+/** The only key a package entry may carry beyond the committed deployment records (written by export-deployments). */
+export const PACKAGE_EXTRA_KEYS = ['wTARIBridgeStartBlock']
+
+/**
+ * Addresses of the committed hardhat-deploy records in one network directory (`deployments/<network>/*.json`),
+ * by record name. Only these records belong in the package: hardhat-deploy's `deployments.all()` also returns
+ * external (LayerZero) deployments, whose DefaultProxyAdmin overrides ours.
+ */
+export function localDeploymentAddresses(networkDir: string): { [name: string]: string } {
+    const addresses: { [name: string]: string } = {}
+    for (const file of fs.readdirSync(networkDir).sort()) {
+        if (!file.endsWith('.json') || !fs.statSync(path.join(networkDir, file)).isFile()) continue
+        const { address } = JSON.parse(fs.readFileSync(path.join(networkDir, file), 'utf8'))
+        if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+            throw new Error(`${path.join(networkDir, file)} has no valid address`)
+        }
+        addresses[path.basename(file, '.json')] = address
+    }
+    return addresses
+}
+
+/** Network directories under `deploymentsDir` that have a hardhat-deploy `.chainId` file, by chain id. */
+export function localDeploymentChains(deploymentsDir: string) {
+    const chains: { [chainId: string]: string[] } = {}
+    for (const network of fs.readdirSync(deploymentsDir).sort()) {
+        const chainIdFile = path.join(deploymentsDir, network, '.chainId')
+        if (!fs.existsSync(chainIdFile)) continue
+        const chainId = fs.readFileSync(chainIdFile, 'utf8').trim()
+        ;(chains[chainId] ??= []).push(network)
+    }
+    return chains
+}
+
+/**
+ * Offline check that the package's deployments.json holds exactly the committed deployment records: for every
+ * `deployments/<network>` with a `.chainId`, the chain's entry has the same record names and addresses, plus at
+ * most PACKAGE_EXTRA_KEYS; and every chain in the manifest has such a directory. Returns the problems found.
+ */
+export function packageDeploymentProblems(
+    manifest: Manifest<{ [key: string]: string | number }>,
+    deploymentsDir: string
+) {
+    const problems: string[] = []
+    const chains = localDeploymentChains(deploymentsDir)
+    for (const [chainId, networks] of Object.entries(chains)) {
+        if (networks.length > 1) {
+            problems.push(`chain ${chainId}: several deployment directories (${networks.join(', ')})`)
+            continue
+        }
+        const entry = manifest[chainId]
+        if (entry === undefined) {
+            problems.push(`chain ${chainId}: missing from the package (deployments/${networks[0]} exists)`)
+            continue
+        }
+        const local = localDeploymentAddresses(path.join(deploymentsDir, networks[0]))
+        for (const [name, address] of Object.entries(local)) {
+            if (!(name in entry)) problems.push(`chain ${chainId}: missing ${name}`)
+            else if (entry[name] !== address) {
+                problems.push(`chain ${chainId}: ${name} is ${entry[name]}, deployments/${networks[0]} has ${address}`)
+            }
+        }
+        for (const key of Object.keys(entry)) {
+            if (!(key in local) && !PACKAGE_EXTRA_KEYS.includes(key)) {
+                problems.push(`chain ${chainId}: ${key} has no deployments/${networks[0]}/${key}.json`)
+            }
+        }
+    }
+    for (const chainId of Object.keys(manifest)) {
+        if (!(chainId in chains))
+            problems.push(`chain ${chainId}: no deployments/<network> directory with this .chainId`)
+    }
+    return problems
+}
