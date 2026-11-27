@@ -106,11 +106,13 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout the committed deployments.json"
+      - name: "Checkout the committed package.json and deployments.json"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: wxtm-bridge-contracts-typechain/deployments/deployments.json
+          sparse-checkout: |
+            wxtm-bridge-contracts-typechain/package.json
+            wxtm-bridge-contracts-typechain/deployments/deployments.json
           sparse-checkout-cone-mode: false
 
       - name: "Download package"
@@ -119,12 +121,13 @@ jobs:
           name: npm-package
           path: ${{ runner.temp }}/package
 
-      - name: "Check package name, version, digest and deployments.json"
+      - name: "Check package digest, entries, package.json and deployments.json"
         env:
           TAG: ${{ github.ref_name }}
           TARBALL: ${{ needs.build.outputs.tarball }}
           SHA256: ${{ needs.build.outputs.sha256 }}
-          COMMITTED: wxtm-bridge-contracts-typechain/deployments/deployments.json
+          COMMITTED_PACKAGE: wxtm-bridge-contracts-typechain/package.json
+          COMMITTED_DEPLOYMENTS: wxtm-bridge-contracts-typechain/deployments/deployments.json
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -132,42 +135,53 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag $TAG has no X.Y.Z version"
           [ "$TARBALL" = "tari-project-wxtm-bridge-contracts-$version.tgz" ] || fail "tarball $TARBALL is not for $version"
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 $SHA256"
-          echo "$SHA256  $RUNNER_TEMP/package/$TARBALL" | sha256sum -c -
           archive="$RUNNER_TEMP/package/$TARBALL"
+          echo "$SHA256  $archive" | sha256sum -c -
+          work=$(mktemp -d)
+          # gnu_tar OUTPUT ARGS...: runs GNU tar with --ignore-zeros, writing stdout to OUTPUT, and fails on any
+          # error or stderr output. node-tar (used by npm) reads past a lone zero block; without --ignore-zeros
+          # GNU tar stops there and misses later entries.
+          gnu_tar() {
+            local output=$1
+            shift
+            tar --ignore-zeros "$@" > "$output" 2> "$work/tar.err" || { cat "$work/tar.err"; fail "tar $1 failed"; }
+            if [ -s "$work/tar.err" ]; then
+              cat "$work/tar.err"
+              fail "tar $1 wrote to stderr"
+            fi
+          }
           # npm unpacks with node-tar (strip: 1 of any top-level directory, link entries skipped, later
           # duplicates win), which can differ from GNU tar. Allow only regular files and directories under
-          # package/, each path once, so both see the same files. Listings are captured first so a tar failure
-          # stops the step (set -e), and grep reads all input so pipefail cannot mask a match.
-          listing=$(tar -tvzf "$archive")
-          paths=$(tar -tzf "$archive")
-          if [ "$(printf '%s\n' "$listing" | wc -l)" != "$(printf '%s\n' "$paths" | wc -l)" ]; then
-            fail "tarball listings disagree"
-          fi
-          if printf '%s\n' "$listing" | cut -c1 | grep -v '^[-d]$' > /dev/null; then
-            fail "tarball has entries that are not regular files or directories"
-          fi
-          if printf '%s\n' "$paths" | grep -v '^package/' > /dev/null; then
-            fail "tarball has entries outside package/"
-          fi
-          if printf '%s\n' "$paths" | grep -E '(^|/)\.\.?(/|$)' > /dev/null; then
-            fail "tarball has . or .. path components"
-          fi
-          duplicates=$(printf '%s\n' "$paths" | sed 's:/*$::' | sort | uniq -d)
-          if [ -n "$duplicates" ]; then
-            fail "tarball has duplicate entries: $duplicates"
-          fi
-          dir=$(mktemp -d)
-          tar -xzf "$archive" -C "$dir" --no-same-owner --no-same-permissions
+          # package/ with plain ASCII names, each path once even ignoring case, so both see the same files.
+          # No pipeline is used as an if condition, and awk reads all its input, so pipefail and SIGPIPE
+          # cannot turn a match into a pass.
+          gnu_tar "$work/listing" -tvzf "$archive"
+          gnu_tar "$work/paths" -tzf "$archive"
+          [ "$(wc -l < "$work/listing")" = "$(wc -l < "$work/paths")" ] || fail "tarball listings disagree"
+          [ -s "$work/paths" ] || fail "tarball is empty"
+          bad=$(awk 'substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d"' "$work/listing")
+          [ -z "$bad" ] || fail "tarball has entries that are not regular files or directories: $bad"
+          bad=$(LC_ALL=C awk '!/^package\/[A-Za-z0-9._@\/-]+$/' "$work/paths")
+          [ -z "$bad" ] || fail "tarball has entries outside package/ or with other characters: $bad"
+          bad=$(awk '/(^|\/)\.\.?(\/|$)/' "$work/paths")
+          [ -z "$bad" ] || fail "tarball has . or .. path components: $bad"
+          duplicates=$(sed 's://*:/:g; s:/*$::' "$work/paths" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort | LC_ALL=C uniq -d)
+          [ -z "$duplicates" ] || fail "tarball has duplicate entries (ignoring case): $duplicates"
+          mkdir "$work/x"
+          gnu_tar /dev/null -xzf "$archive" -C "$work/x" --no-same-owner --no-same-permissions
           for file in package/package.json package/deployments/deployments.json; do
-            [ -f "$dir/$file" ] && [ ! -L "$dir/$file" ] || fail "$file is missing or not a regular file"
+            [ -f "$work/x/$file" ] && [ ! -L "$work/x/$file" ] || fail "$file is missing or not a regular file"
           done
-          name=$(jq -r '.name' "$dir/package/package.json")
-          packed=$(jq -r '.version' "$dir/package/package.json")
+          # npm pack keeps package.json byte-identical, so no build step can add scripts, dependencies or bin.
+          cmp "$work/x/package/package.json" "$COMMITTED_PACKAGE" ||
+            fail "packed package.json differs from the committed one"
+          name=$(jq -r '.name' "$work/x/package/package.json")
+          packed=$(jq -r '.version' "$work/x/package/package.json")
           [ "$name" = "@tari-project/wxtm-bridge-contracts" ] || fail "package name is $name"
           [ "$packed" = "$version" ] || fail "package version $packed is not the tag's $version"
-          cmp "$dir/package/deployments/deployments.json" "$COMMITTED" ||
+          cmp "$work/x/package/deployments/deployments.json" "$COMMITTED_DEPLOYMENTS" ||
             fail "packed deployments.json differs from the committed one"
-          echo "package $name@$packed matches the tag, and its deployments.json the committed file"
+          echo "package $name@$packed matches the tag, and its package.json and deployments.json the committed files"
 
   # Publishes the exact tarball built and checked above: no checkout, no install, no project scripts.
   publish:
