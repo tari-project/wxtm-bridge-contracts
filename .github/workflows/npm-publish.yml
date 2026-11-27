@@ -133,8 +133,31 @@ jobs:
           [ "$TARBALL" = "tari-project-wxtm-bridge-contracts-$version.tgz" ] || fail "tarball $TARBALL is not for $version"
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 $SHA256"
           echo "$SHA256  $RUNNER_TEMP/package/$TARBALL" | sha256sum -c -
+          archive="$RUNNER_TEMP/package/$TARBALL"
+          # npm unpacks with node-tar (strip: 1 of any top-level directory, link entries skipped, later
+          # duplicates win), which can differ from GNU tar. Allow only regular files and directories under
+          # package/, each path once, so both see the same files. Listings are captured first so a tar failure
+          # stops the step (set -e), and grep reads all input so pipefail cannot mask a match.
+          listing=$(tar -tvzf "$archive")
+          paths=$(tar -tzf "$archive")
+          if [ "$(printf '%s\n' "$listing" | wc -l)" != "$(printf '%s\n' "$paths" | wc -l)" ]; then
+            fail "tarball listings disagree"
+          fi
+          if printf '%s\n' "$listing" | cut -c1 | grep -v '^[-d]$' > /dev/null; then
+            fail "tarball has entries that are not regular files or directories"
+          fi
+          if printf '%s\n' "$paths" | grep -v '^package/' > /dev/null; then
+            fail "tarball has entries outside package/"
+          fi
+          if printf '%s\n' "$paths" | grep -E '(^|/)\.\.?(/|$)' > /dev/null; then
+            fail "tarball has . or .. path components"
+          fi
+          duplicates=$(printf '%s\n' "$paths" | sed 's:/*$::' | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            fail "tarball has duplicate entries: $duplicates"
+          fi
           dir=$(mktemp -d)
-          tar -xzf "$RUNNER_TEMP/package/$TARBALL" -C "$dir" --no-same-owner --no-same-permissions
+          tar -xzf "$archive" -C "$dir" --no-same-owner --no-same-permissions
           for file in package/package.json package/deployments/deployments.json; do
             [ -f "$dir/$file" ] && [ ! -L "$dir/$file" ] || fail "$file is missing or not a regular file"
           done

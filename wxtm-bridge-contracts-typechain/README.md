@@ -9,7 +9,7 @@
 `.github/workflows/npm-publish.yml` runs only for a tag named `@tari-project/wxtm-bridge-contracts@vX.Y.Z` (digits only; other tag names, such as `release/*`, never start it), and has no manual trigger. It has three jobs:
 
 1. **build** (read-only, no publish credentials): checks that the tagged commit is on `development` and that the tag matches `package.json`'s version, runs `npm ci --ignore-scripts`, compiles, runs `npm run verify:wtari-package`, builds, and packs the tarball. The job log and summary show the tarball's SHA-256.
-2. **check** (read-only, no install, no repository scripts): checks out only the committed `deployments.json`, downloads the tarball and checks its SHA-256. It requires the file name to be exactly `tari-project-wxtm-bridge-contracts-<tag version>.tgz`, and the packed `package.json` to have the name `@tari-project/wxtm-bridge-contracts` and the tag's version (read with `jq`). It also requires the packed `deployments.json` to be byte-identical to the committed file.
+2. **check** (read-only, no install, no repository scripts): checks out only the committed `deployments.json`, downloads the tarball and checks its SHA-256. It requires the file name to be exactly `tari-project-wxtm-bridge-contracts-<tag version>.tgz`, and the packed `package.json` to have the name `@tari-project/wxtm-bridge-contracts` and the tag's version (read with `jq`). It also requires the packed `deployments.json` to be byte-identical to the committed file. Before extracting, it lists the tarball and fails unless every entry is a regular file or directory under `package/` and no path appears twice. npm unpacks differently from GNU tar (it strips any top-level directory, skips link entries and lets later duplicates win), and this keeps both seeing the same files.
 3. **publish** (GitHub environment `npm-publish`, `id-token: write`; needs build and check): no checkout and no install. It downloads that tarball, checks its exact tag-derived name and SHA-256, and runs `npm publish <tarball> --provenance --ignore-scripts`.
 
 The build job runs dependency code (hardhat plugins, typechain, `tsc`) after `verify:wtari-package`, so the check job verifies the packed name, version and `deployments.json` again. **Residual:** the compiled `.js` and `.d.ts` files cannot be checked without rebuilding them, so a compromised build dependency could still alter them.
@@ -48,14 +48,15 @@ The tag, `development` and version checks inside the workflow run from the tagge
 
 3. Before approving the `npm-publish` environment, the reviewer checks the release independently. The checks inside the workflow are advisory, because the tagged commit supplies them.
    - The run is for a version tag (`@tari-project/wxtm-bridge-contracts@vX.Y.Z`), not a branch.
-   - The tagged commit is on `development`, and its workflows are the ones on `development` (the diff must be empty):
+   - The tagged commit is on `development`, so its workflow file is reviewed code:
 
      ```sh
      git fetch origin --tags
      sha=$(git rev-parse "@tari-project/wxtm-bridge-contracts@v0.3.0^{commit}")
      git merge-base --is-ancestor "$sha" origin/development && echo on-development
-     git diff origin/development "$sha" -- .github/workflows/
      ```
+
+   - The run's commit SHA (shown on the run page) equals that `$sha`.
 
    - The build and check jobs passed, and the packed file list in the build log is as expected.
 
