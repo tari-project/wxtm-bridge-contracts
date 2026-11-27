@@ -15,7 +15,7 @@ import TransparentUpgradeableProxy from 'hardhat-deploy/extendedArtifacts/Transp
 import { EndpointId, endpointIdToNetwork } from '@layerzerolabs/lz-definitions'
 import { getDeploymentAddressAndAbi } from '@layerzerolabs/lz-evm-sdk-v2'
 
-import { packageDeploymentProblems } from '../utils/deployments-manifest'
+import { WTARI_PROXY_ADMIN_NAME, WTARI_RECORD_NAMES, packageDeploymentProblems } from '../utils/deployments-manifest'
 
 export interface WtariChainConfig {
     // Hardhat network for this chain; hardhat.config.ts adds it unless defined there by hand.
@@ -80,7 +80,7 @@ const SAFE_GUARD_SLOT = ethers.utils.id('guard_manager.guard.address')
 // v1.5.0 only; always zero on older versions.
 const SAFE_MODULE_GUARD_SLOT = ethers.utils.id('module_manager.module_guard.address')
 
-const PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
+const PROXY_ADMIN_NAME = WTARI_PROXY_ADMIN_NAME
 const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero
 const MINTER_ROLE = ethers.utils.id('MINTER_ROLE')
 const LOW_MINTER_ROLE = ethers.utils.id('LOW_MINTER_ROLE')
@@ -772,19 +772,8 @@ function create2(salt: string, initCode: string): ExpectedCreation {
     return { address, salt, initCode }
 }
 
-// The hardhat-deploy records deploy:wtari creates; exactly these are exported to the package.
-export const WTARI_RECORD_NAMES = [
-    PROXY_ADMIN_NAME,
-    'wTARI',
-    'wTARI_Proxy',
-    'wTARI_Implementation',
-    'wTARIController',
-    'wTARIController_Proxy',
-    'wTARIController_Implementation',
-    'wTARIBridge',
-    'wTARIBridge_Proxy',
-    'wTARIBridge_Implementation',
-] as const
+// Defined in utils/deployments-manifest.ts (Node builtins only) so the publish workflow's check job can use it.
+export { WTARI_RECORD_NAMES }
 
 /** Every wTARI deployment record's CREATE2 address, recomputed from compiled code, salts and config. */
 export async function expectedWtariCreations(

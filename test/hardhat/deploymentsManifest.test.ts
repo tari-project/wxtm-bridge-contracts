@@ -6,11 +6,13 @@ import path from 'path'
 import { expect } from 'chai'
 
 import {
+    WTARI_RECORD_NAMES,
     localDeploymentAddresses,
     packageDeploymentProblems,
     readManifest,
     updateManifestEntry,
     withFileLock,
+    wtariStartBlockProblems,
 } from '../../utils/deployments-manifest'
 
 const ROOT = path.join(__dirname, '..', '..')
@@ -211,5 +213,34 @@ describe('package deployments.json against deployments/<network>', function () {
             path.join(ROOT, 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
         )
         expect(packageDeploymentProblems(manifest, path.join(ROOT, 'deployments'))).to.deep.equal([])
+    })
+})
+
+const WTARI_KEYS = [...WTARI_RECORD_NAMES, 'wTARIBridgeStartBlock'].sort()
+
+describe('package wTARI start block against deploy/wtari (check job)', function () {
+    const configDir = path.join(ROOT, 'deploy', 'wtari')
+    const committed = () =>
+        readManifest<{ [key: string]: string | number }>(
+            path.join(ROOT, 'wxtm-bridge-contracts-typechain', 'deployments', 'deployments.json')
+        )
+
+    it('holds for the committed package deployments.json', function () {
+        expect(wtariStartBlockProblems(committed(), configDir)).to.deep.equal([])
+    })
+
+    it('reports a different start block, a missing config and a wrong wTARI key set', function () {
+        const manifest = committed()
+        const start = manifest['84532'].wTARIBridgeStartBlock as number
+        manifest['84532'].wTARIBridgeStartBlock = start + 1
+        manifest['999'] = { wTARI: '0x01' }
+        expect(wtariStartBlockProblems(manifest, configDir)).to.deep.equal([
+            `chain 999: wTARI keys wTARI are not exactly ${[...WTARI_KEYS].join(', ')}`,
+            'chain 999: has wTARI keys but no deploy/wtari/999.json',
+            `chain 84532: wTARIBridgeStartBlock ${start + 1} is not deploy/wtari/84532.json's ${start}`,
+        ])
+        expect(wtariStartBlockProblems(null, configDir)).to.deep.equal([
+            'deployments.json is not an object of chain entries',
+        ])
     })
 })

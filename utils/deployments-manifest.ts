@@ -163,6 +163,22 @@ export async function updateManifestEntry<T>(
     )
 }
 
+export const WTARI_PROXY_ADMIN_NAME = 'wTARIProxyAdmin'
+
+// The hardhat-deploy records deploy:wtari creates; exactly these are exported to the package.
+export const WTARI_RECORD_NAMES = [
+    WTARI_PROXY_ADMIN_NAME,
+    'wTARI',
+    'wTARI_Proxy',
+    'wTARI_Implementation',
+    'wTARIController',
+    'wTARIController_Proxy',
+    'wTARIController_Implementation',
+    'wTARIBridge',
+    'wTARIBridge_Proxy',
+    'wTARIBridge_Implementation',
+] as const
+
 /** The only key a package entry may carry beyond the committed deployment records (written by export-deployments). */
 export const PACKAGE_EXTRA_KEYS = ['wTARIBridgeStartBlock']
 
@@ -250,6 +266,45 @@ export function packageDeploymentProblems(
         if (!/^\d+$/.test(chainId)) problems.push(`chain ${chainId}: not a decimal chain id`)
         else if (!hasOwn(chains, chainId)) {
             problems.push(`chain ${chainId}: no deployments/<network> directory with this .chainId`)
+        }
+    }
+    return problems
+}
+
+/**
+ * Offline check of the wTARI keys in the package's deployments.json against deploy/wtari/<chainId>.json (Node
+ * builtins only, so the publish workflow's check job can run it): every chain with wTARI* keys has exactly
+ * WTARI_RECORD_NAMES plus wTARIBridgeStartBlock, a config file, and a config bridgeStartBlock equal to
+ * wTARIBridgeStartBlock. The CREATE2 address recomputation is in wtariPackageProblems (tasks/wtari.ts).
+ */
+export function wtariStartBlockProblems(manifest: unknown, wtariConfigDir: string) {
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+        return ['deployments.json is not an object of chain entries']
+    }
+    const problems: string[] = []
+    const wanted = [...WTARI_RECORD_NAMES, 'wTARIBridgeStartBlock'].sort()
+    for (const [chainId, entry] of Object.entries(manifest)) {
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+        const values = entry as { [key: string]: unknown }
+        const keys = Object.keys(values)
+            .filter((key) => key.startsWith('wTARI'))
+            .sort()
+        if (keys.length === 0) continue
+        if (JSON.stringify(keys) !== JSON.stringify(wanted)) {
+            problems.push(`chain ${chainId}: wTARI keys ${keys.join(', ')} are not exactly ${wanted.join(', ')}`)
+        }
+        const configFile = path.join(wtariConfigDir, `${chainId}.json`)
+        if (!/^\d+$/.test(chainId) || !fs.existsSync(configFile)) {
+            problems.push(`chain ${chainId}: has wTARI keys but no deploy/wtari/${chainId}.json`)
+            continue
+        }
+        const { bridgeStartBlock } = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+        if (!Number.isInteger(bridgeStartBlock) || bridgeStartBlock <= 0) {
+            problems.push(`chain ${chainId}: deploy/wtari/${chainId}.json has no positive integer bridgeStartBlock`)
+        } else if (values.wTARIBridgeStartBlock !== bridgeStartBlock) {
+            problems.push(
+                `chain ${chainId}: wTARIBridgeStartBlock ${values.wTARIBridgeStartBlock} is not deploy/wtari/${chainId}.json's ${bridgeStartBlock}`
+            )
         }
     }
     return problems
