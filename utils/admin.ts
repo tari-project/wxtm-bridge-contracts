@@ -30,15 +30,28 @@ export async function getMinters(hre: Pick<HardhatRuntimeEnvironment, 'getNamedA
     return [lowMinter, highMinter]
 }
 
-/** Owners and threshold of the Safe at `address`, or undefined when it does not answer as a Safe. */
-export async function safeOwners(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string) {
+// Safe's guard storage slot: keccak256("guard_manager.guard.address").
+const SAFE_GUARD_SLOT = '0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8'
+const SAFE_MODULES_SENTINEL = '0x0000000000000000000000000000000000000001'
+
+/** Owners, threshold, enabled modules and guard of the Safe at `address`; undefined when it does not answer as one. */
+export async function safeInfo(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string) {
     const safe = new ethers.Contract(
         address,
-        ['function getOwners() view returns (address[])', 'function getThreshold() view returns (uint256)'],
+        [
+            'function getOwners() view returns (address[])',
+            'function getThreshold() view returns (uint256)',
+            'function getModulesPaginated(address start, uint256 pageSize) view returns (address[], address)',
+        ],
         hre.ethers.provider
     )
     try {
-        return { owners: (await safe.getOwners()) as string[], threshold: (await safe.getThreshold()).toNumber() }
+        return {
+            owners: (await safe.getOwners()) as string[],
+            threshold: (await safe.getThreshold()).toNumber(),
+            modules: (await safe.getModulesPaginated(SAFE_MODULES_SENTINEL, 10))[0] as string[],
+            guard: await slotAddress(hre, address, SAFE_GUARD_SLOT),
+        }
     } catch (e) {
         if ((e as { code?: string }).code === 'CALL_EXCEPTION') return undefined
         throw e
@@ -48,8 +61,10 @@ export async function safeOwners(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>,
 /**
  * The `guardian` named account for this network: the Safe that may pause wXTMBridge and wXTMController (only the
  * admin can unpause). Like the admin, never falls back to the deployer. Must answer as a Safe (not a key, a
- * ProxyAdmin or a token), and neither it nor its owners may be the admin, the deployer or a minter: a compromised
- * key there must not also be the only fast pauser.
+ * ProxyAdmin or a token) whose only control is its owners, and those must be plain keys (the on-call humans): no
+ * modules, no guard, no contract or EIP-7702 delegated owners. Neither it nor its owners may be the admin, the
+ * deployer or a minter: a compromised key there must not also be the only fast pauser. Owners can change later, so
+ * this is a deploy-time check.
  */
 export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network' | 'ethers'>) {
     const { guardian, admin, deployer } = await hre.getNamedAccounts()
@@ -61,12 +76,19 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
     }
     // 0xef0100: an EIP-7702 delegated EOA, a key even if its delegate answers like a Safe.
     const delegated = (await hre.ethers.provider.getCode(guardian)).toLowerCase().startsWith('0xef0100')
-    const safe = delegated ? undefined : await safeOwners(hre, guardian)
+    const safe = delegated ? undefined : await safeInfo(hre, guardian)
     const forbidden = [admin, deployer, ...(await getMinters(hre))].filter(Boolean).map((a) => a.toLowerCase())
-    if (!safe || [guardian, ...safe.owners].some((a) => forbidden.includes(a.toLowerCase()))) {
+    const ownerCode = await Promise.all((safe?.owners ?? []).map((owner) => hre.ethers.provider.getCode(owner)))
+    if (
+        !safe ||
+        [guardian, ...safe.owners].some((a) => forbidden.includes(a.toLowerCase())) ||
+        safe.modules.length > 0 ||
+        safe.guard !== ethers.constants.AddressZero ||
+        ownerCode.some((code) => code !== '0x')
+    ) {
         throw new Error(
-            `Guardian ${guardian} on "${hre.network.name}" must be a Safe that is not, and is not owned by, ` +
-                `the admin, the deployer or a minter.`
+            `Guardian ${guardian} on "${hre.network.name}" must be a Safe with plain-key owners, no modules and no ` +
+                `guard, that is not, and is not owned by, the admin, the deployer or a minter.`
         )
     }
     return guardian

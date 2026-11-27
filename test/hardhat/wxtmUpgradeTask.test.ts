@@ -109,6 +109,14 @@ describe('upgrade-calldata:wxtm', function () {
             expect(await refusal(run('wXTMBridge', {}))).to.match(/is not the compiled wXTMBridge/)
 
             const tx = await run('wXTMBridge', { deployImplementation: true })
+            // What a second person reproduces: the printed init-code hash, factory and salt give the implementation.
+            const { factory, salt, initCodeHash } = tx ?? {}
+            expect(initCodeHash).to.equal(ethers.utils.keccak256((await artifacts.readArtifact('wXTMBridge')).bytecode))
+            expect(ethers.utils.getCreate2Address(factory ?? '', salt ?? '', initCodeHash ?? '')).to.equal(
+                tx?.implementation
+            )
+            expect(await hre.ethers.provider.getCode(tx?.implementation ?? '')).to.not.equal('0x')
+            expect(tx?.commit).to.match(/^[0-9a-f]{40}$/)
             // Not recorded until the proxy runs it.
             expect((await deployments.get('wXTMBridge_Implementation')).address).to.equal(recordedBefore)
             expect(await refusal(run('wXTMBridge', { check: true }))).to.match(/not upgraded and set up/)

@@ -57,7 +57,7 @@ describe('admin from named config', function () {
         }
     })
 
-    it('returns a configured guardian Safe, and rejects keys, other contracts and Safes owned by the admin, the deployer or a minter', async function () {
+    it('returns a configured guardian Safe, and rejects keys, other contracts, Safes with modules, a guard or contract owners, and Safes owned by the admin, the deployer or a minter', async function () {
         const [signer, owner] = await hre.ethers.getSigners()
         const DEPLOYER = '0x1111111111111111111111111111111111111111'
         const safe = await deploySafeMock(signer, [owner.address])
@@ -67,6 +67,17 @@ describe('admin from named config', function () {
         await hre.network.provider.send('hardhat_setCode', [delegated, `0xef0100${safe.slice(2)}`])
         const minterSafe = LOW_MINTER
         await hre.network.provider.send('hardhat_setCode', [minterSafe, await hre.ethers.provider.getCode(safe)])
+        const withModule = await deploySafeMock(signer, [owner.address])
+        await (
+            await new ethers.Contract(withModule, ['function addModule(address)'], signer).addModule(owner.address)
+        ).wait()
+        const withGuard = await deploySafeMock(signer, [owner.address])
+        const guardSlot = '0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8'
+        await hre.network.provider.send('hardhat_setStorageAt', [
+            withGuard,
+            guardSlot,
+            ethers.utils.hexZeroPad(safe, 32),
+        ])
         const notASafe = (await (await hre.ethers.getContractFactory('wTARIBridge')).deploy()).address
         for (const guardian of [
             owner.address, // a key
@@ -77,10 +88,14 @@ describe('admin from named config', function () {
             await deploySafeMock(signer, [owner.address, ADMIN]),
             await deploySafeMock(signer, [DEPLOYER]),
             await deploySafeMock(signer, [HIGH_MINTER]),
+            withModule,
+            withGuard,
+            await deploySafeMock(signer, [safe]), // a contract owner
+            await deploySafeMock(signer, [delegated]), // an EIP-7702 delegated owner
         ]) {
             let error: Error | undefined
             await getGuardian(hreWithGuardian(guardian, DEPLOYER)).catch((e: Error) => (error = e))
-            expect(error?.message, guardian).to.match(/must be a Safe that is not, and is not owned by/)
+            expect(error?.message, guardian).to.match(/must be a Safe with plain-key owners, no modules and no guard/)
         }
     })
 
@@ -97,7 +112,9 @@ describe('admin from named config', function () {
                 () => undefined,
                 (e: Error) => e
             )
-        expect((await errorOf(sepoliaMinters))?.message).to.match(/must be a Safe that is not, and is not owned by/)
+        expect((await errorOf(sepoliaMinters))?.message).to.match(
+            /must be a Safe with plain-key owners, no modules and no guard/
+        )
         expect(await errorOf()).to.be.undefined // with mainnet's minters it is accepted
         expect((await errorOf([undefined, undefined]))?.message).to.match(
             /No minters for network "hardhat": set namedAccounts\.lowMinter/

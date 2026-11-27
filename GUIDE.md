@@ -18,6 +18,12 @@ alone, and wXTMBridge/wXTMController are only checked (upgraded and set up). Upg
 2. After it is executed, `npx hardhat --network mainnet upgrade-calldata:wxtm --contract wXTMController --check`
    verifies the upgrade and records it in `deployments/mainnet`.
 
+**Before signing**, a second person checks out the printed commit (ideally in the SEC-06 reproducible build image),
+runs `npx hardhat compile` and the task in print mode (no flags, read-only) against the same network, and confirms the
+same commit, init-code hash, CREATE2 factory/salt and implementation address, and calldata; that the implementation
+has the compiled code (the task refuses otherwise); and that the admin and the guardian Safe (its owners, threshold, no
+modules, no guard) match the published addresses. Only then sign.
+
 #### **Verify**
 
 `npx hardhat run scripts/verify.ts --network sepolia-testnet`
