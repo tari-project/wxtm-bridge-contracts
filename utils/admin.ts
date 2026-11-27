@@ -3,6 +3,8 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
 import { getDeployments } from '../wxtm-bridge-contracts-typechain/deployments'
 
+import { checkSafe } from './safe'
+
 /**
  * The `admin` named account for this network: ProxyAdmin owner, DEFAULT_ADMIN_ROLE holder, wXTM owner and
  * LayerZero delegate. Never falls back to the deployer, so whoever runs a deploy does not get admin powers.
@@ -30,43 +32,18 @@ export async function getMinters(hre: Pick<HardhatRuntimeEnvironment, 'getNamedA
     return [lowMinter, highMinter]
 }
 
-// Safe's guard storage slot: keccak256("guard_manager.guard.address").
-const SAFE_GUARD_SLOT = '0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8'
-const SAFE_MODULES_SENTINEL = '0x0000000000000000000000000000000000000001'
-
-/** Owners, threshold, enabled modules and guard of the Safe at `address`; undefined when it does not answer as one. */
-export async function safeInfo(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string) {
-    const safe = new ethers.Contract(
-        address,
-        [
-            'function getOwners() view returns (address[])',
-            'function getThreshold() view returns (uint256)',
-            'function getModulesPaginated(address start, uint256 pageSize) view returns (address[], address)',
-        ],
-        hre.ethers.provider
-    )
-    try {
-        return {
-            owners: (await safe.getOwners()) as string[],
-            threshold: (await safe.getThreshold()).toNumber(),
-            modules: (await safe.getModulesPaginated(SAFE_MODULES_SENTINEL, 10))[0] as string[],
-            guard: await slotAddress(hre, address, SAFE_GUARD_SLOT),
-        }
-    } catch (e) {
-        if ((e as { code?: string }).code === 'CALL_EXCEPTION') return undefined
-        throw e
-    }
-}
-
 /**
  * The `guardian` named account for this network: the Safe that may pause wXTMBridge and wXTMController (only the
- * admin can unpause). Like the admin, never falls back to the deployer. Must answer as a Safe (not a key, a
- * ProxyAdmin or a token) whose only control is its owners, and those must be plain keys (the on-call humans): no
- * modules, no guard, no contract or EIP-7702 delegated owners. Neither it nor its owners may be the admin, the
- * deployer or a minter: a compromised key there must not also be the only fast pauser. Owners can change later, so
- * this is a deploy-time check.
+ * admin can unpause). Like the admin, never falls back to the deployer. Must be an official Safe (checkSafe: official
+ * SafeProxy and singleton, no modules, no guards, sane owners/threshold) owned only by plain keys (the on-call
+ * humans: no contract or EIP-7702 delegated owners). Neither it nor its owners may be the admin, a minter or, when
+ * `deploying`, the deployer: a compromised key there must not also be the only fast pauser. Owners can change later,
+ * so this is a deploy-time check. Returns the guardian and its owners and threshold.
  */
-export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network' | 'ethers'>) {
+export async function getGuardian(
+    hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network' | 'ethers'>,
+    { deploying }: { deploying: boolean }
+) {
     const { guardian, admin, deployer } = await hre.getNamedAccounts()
     if (!guardian || guardian === ethers.constants.AddressZero) {
         throw new Error(
@@ -74,24 +51,18 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
                 `to the Safe that must hold PAUSER_ROLE.`
         )
     }
-    // 0xef0100: an EIP-7702 delegated EOA, a key even if its delegate answers like a Safe.
-    const delegated = (await hre.ethers.provider.getCode(guardian)).toLowerCase().startsWith('0xef0100')
-    const safe = delegated ? undefined : await safeInfo(hre, guardian)
-    const forbidden = [admin, deployer, ...(await getMinters(hre))].filter(Boolean).map((a) => a.toLowerCase())
-    const ownerCode = await Promise.all((safe?.owners ?? []).map((owner) => hre.ethers.provider.getCode(owner)))
-    if (
-        !safe ||
-        [guardian, ...safe.owners].some((a) => forbidden.includes(a.toLowerCase())) ||
-        safe.modules.length > 0 ||
-        safe.guard !== ethers.constants.AddressZero ||
-        ownerCode.some((code) => code !== '0x')
-    ) {
+    const { owners, threshold } = await checkSafe(hre.ethers.provider, 'Guardian', guardian)
+    const forbidden = [admin, ...(deploying ? [deployer] : []), ...(await getMinters(hre))]
+        .filter(Boolean)
+        .map((a) => a.toLowerCase())
+    const ownerCode = await Promise.all(owners.map((owner) => hre.ethers.provider.getCode(owner)))
+    if ([guardian, ...owners].some((a) => forbidden.includes(a.toLowerCase())) || ownerCode.some((c) => c !== '0x')) {
         throw new Error(
-            `Guardian ${guardian} on "${hre.network.name}" must be a Safe with plain-key owners, no modules and no ` +
-                `guard, that is not, and is not owned by, the admin, the deployer or a minter.`
+            `Guardian ${guardian} on "${hre.network.name}" must be owned by plain keys only, and neither it nor its ` +
+                `owners may be the admin, a minter${deploying ? ' or the deployer' : ''}.`
         )
     }
-    return guardian
+    return { guardian, owners, threshold: threshold.toNumber() }
 }
 
 export const EIP1967_IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc'

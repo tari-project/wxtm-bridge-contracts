@@ -7,7 +7,7 @@ import deployWxtm from '../../deploy/wxtm/0_wXTM'
 import deployController from '../../deploy/wxtm/1_wXTMController'
 import deployBridge from '../../deploy/wxtm/2_wXTMBridge'
 
-import { deploySafeMock } from './safeMock'
+import { makeSafeProxy } from './safeMock'
 
 describe('deploy/wxtm scripts', function () {
     this.timeout(120_000)
@@ -16,7 +16,7 @@ describe('deploy/wxtm scripts', function () {
         await deployments.fixture(['none']) // empty in-memory deployments
         const [deployer, admin, newAdmin] = await hre.ethers.getSigners()
         const from = deployer.address
-        const guardian = await deploySafeMock(deployer, ['0x7777777777777777777777777777777777777777'])
+        const guardian = await makeSafeProxy(['0x7777777777777777777777777777777777777777'])
         // Any contract stands in for wXTM (recorded, so 0_wXTM leaves it alone).
         const wxtm = (await deployments.deploy('wXTMStandIn', { contract: 'wTARIBridge', from })).address
         await deployments.save('wXTM', { address: wxtm, abi: [] })

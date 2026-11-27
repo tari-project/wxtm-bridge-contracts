@@ -24,21 +24,18 @@ import {
     fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
-    safeFallbackHandlers,
-    safeSingletons,
     safeTxHashes,
     uncheckedImmutables,
     verifyWtariContracts,
     withRedactedRpcUrls,
     wtariPackageProblems,
 } from '../../tasks/wtari'
+import { safeFallbackHandlers, safeSingletons } from '../../utils/safe'
 import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
+import { SAFE_SINGLETON, makeSafeProxy } from './safeMock'
+
 const ROOT = path.join(__dirname, '..', '..')
-const SAFE_SINGLETON = '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762'
-// Runtime code of an official v1.4.1 SafeProxy (from SafeProxyFactory 0x4e1DCf7A...proxyCreationCode on Ethereum).
-const SAFE_PROXY_V141_RUNTIME =
-    '0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033'
 const OOTLE_ADDRESS =
     'otl_esm_1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7v9kn6'
 
@@ -279,19 +276,8 @@ describe('deploy:wtari dry run', function () {
     const setStorage = (address: string, slot: string | number, value: string | number) =>
         ethers.provider.send('hardhat_setStorageAt', [address, toQuantity(slot), toWord(value)])
 
-    // A real v1.4.1 SafeProxy whose singleton (SafeMock code at the official singleton address) uses
-    // SafeMock's storage layout: slot 0 singleton, 1 owners, 2 threshold, 3 modules.
-    async function makeSafe(owners: string[], threshold: number, singleton = SAFE_SINGLETON) {
-        const address = ethers.Wallet.createRandom().address
-        await ethers.provider.send('hardhat_setCode', [address, SAFE_PROXY_V141_RUNTIME])
-        await setStorage(address, 0, singleton)
-        await setStorage(address, 1, owners.length)
-        const ownersStart = ethers.BigNumber.from(ethers.utils.keccak256(toWord(1)))
-        for (let i = 0; i < owners.length; i++) {
-            await setStorage(address, ownersStart.add(i).toHexString(), owners[i])
-        }
-        await setStorage(address, 2, threshold)
-        return new Contract(address, safeAbi, safeOwner)
+    async function makeSafe(owners: string[], threshold: number, singleton?: string) {
+        return new Contract(await makeSafeProxy(owners, threshold, singleton), safeAbi, safeOwner)
     }
 
     async function contracts() {

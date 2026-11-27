@@ -5,7 +5,7 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
 import { assertNotListedElsewhere, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
 
-import { deploySafeMock } from './safeMock'
+import { deploySafeMock, makeSafeProxy } from './safeMock'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -49,74 +49,78 @@ describe('admin from named config', function () {
         expect(await getAdmin(hreWithAdmin(ADMIN))).to.equal(ADMIN)
     })
 
+    const DEPLOYER = '0x1111111111111111111111111111111111111111'
+    const guardianError = (hre: HardhatRuntimeEnvironment, deploying = true) =>
+        getGuardian(hre, { deploying }).then(
+            () => undefined,
+            (e: Error) => e.message
+        )
+
     it('rejects an unset or zero guardian', async function () {
         for (const guardian of [undefined, ethers.constants.AddressZero]) {
-            let error: Error | undefined
-            await getGuardian(hreWithGuardian(guardian)).catch((e: Error) => (error = e))
-            expect(error?.message).to.match(/set namedAccounts\.guardian\["hardhat"\]/)
+            expect(await guardianError(hreWithGuardian(guardian))).to.match(/set namedAccounts\.guardian\["hardhat"\]/)
         }
     })
 
-    it('returns a configured guardian Safe, and rejects keys, other contracts, Safes with modules, a guard or contract owners, and Safes owned by the admin, the deployer or a minter', async function () {
+    it('accepts an official Safe owned by plain keys, and refuses anything else', async function () {
         const [signer, owner] = await hre.ethers.getSigners()
-        const DEPLOYER = '0x1111111111111111111111111111111111111111'
-        const safe = await deploySafeMock(signer, [owner.address])
-        expect(await getGuardian(hreWithGuardian(safe))).to.equal(safe)
+        const safe = await makeSafeProxy([owner.address])
+        expect(await getGuardian(hreWithGuardian(safe), { deploying: true })).to.deep.equal({
+            guardian: safe,
+            owners: [owner.address],
+            threshold: 1,
+        })
 
         const delegated = '0x5555555555555555555555555555555555555555'
         await hre.network.provider.send('hardhat_setCode', [delegated, `0xef0100${safe.slice(2)}`])
-        const minterSafe = LOW_MINTER
-        await hre.network.provider.send('hardhat_setCode', [minterSafe, await hre.ethers.provider.getCode(safe)])
-        const withModule = await deploySafeMock(signer, [owner.address])
+        const withModule = await makeSafeProxy([owner.address])
         await (
             await new ethers.Contract(withModule, ['function addModule(address)'], signer).addModule(owner.address)
         ).wait()
-        const withGuard = await deploySafeMock(signer, [owner.address])
-        const guardSlot = '0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8'
+        const withGuard = await makeSafeProxy([owner.address])
+        const guardSlot = ethers.utils.id('guard_manager.guard.address')
         await hre.network.provider.send('hardhat_setStorageAt', [
             withGuard,
             guardSlot,
             ethers.utils.hexZeroPad(safe, 32),
         ])
         const notASafe = (await (await hre.ethers.getContractFactory('wTARIBridge')).deploy()).address
-        for (const guardian of [
-            owner.address, // a key
-            delegated, // an EIP-7702 delegated key
-            ADMIN,
-            notASafe, // e.g. a ProxyAdmin or a token
-            minterSafe,
-            await deploySafeMock(signer, [owner.address, ADMIN]),
-            await deploySafeMock(signer, [DEPLOYER]),
-            await deploySafeMock(signer, [HIGH_MINTER]),
-            withModule,
-            withGuard,
-            await deploySafeMock(signer, [safe]), // a contract owner
-            await deploySafeMock(signer, [delegated]), // an EIP-7702 delegated owner
-        ]) {
-            let error: Error | undefined
-            await getGuardian(hreWithGuardian(guardian, DEPLOYER)).catch((e: Error) => (error = e))
-            expect(error?.message, guardian).to.match(/must be a Safe with plain-key owners, no modules and no guard/)
+        for (const [guardian, reason] of [
+            [owner.address, /no code|not an official SafeProxy/], // a key
+            [delegated, /not an official SafeProxy/], // an EIP-7702 delegated key
+            [notASafe, /not an official SafeProxy/], // e.g. a ProxyAdmin or a token
+            [await deploySafeMock(signer, [owner.address]), /not an official SafeProxy/], // Safe-shaped, not a Safe
+            [withModule, /has modules enabled/],
+            [withGuard, /has a transaction guard set/],
+            [await makeSafeProxy([]), /threshold 1 of 0 owners/], // uninitialised
+            [await makeSafeProxy([owner.address], 2), /threshold 2 of 1 owners/],
+            [await makeSafeProxy([owner.address, ADMIN]), /neither it nor its owners may be the admin/],
+            [await makeSafeProxy([DEPLOYER]), /neither it nor its owners may be the admin/],
+            [await makeSafeProxy([HIGH_MINTER]), /neither it nor its owners may be the admin/],
+            [await makeSafeProxy([safe]), /owned by plain keys only/], // a contract owner
+            [await makeSafeProxy([delegated]), /owned by plain keys only/], // an EIP-7702 delegated owner
+        ] as [string, RegExp][]) {
+            expect(await guardianError(hreWithGuardian(guardian, DEPLOYER)), guardian).to.match(reason)
         }
     })
 
+    it('refuses a deployer-owned guardian only when deploying', async function () {
+        const ownedByDeployer = await makeSafeProxy([DEPLOYER])
+        expect(await guardianError(hreWithGuardian(ownedByDeployer, DEPLOYER))).to.match(/or the deployer/)
+        expect(await guardianError(hreWithGuardian(ownedByDeployer, DEPLOYER), false)).to.equal(undefined)
+    })
+
     it("checks the guardian against the network's own minters, and fails without them", async function () {
-        const [signer] = await hre.ethers.getSigners()
         // As on sepolia-testnet: one address is both minters (and the admin there).
-        const sepoliaMinters = [
-            '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
-            '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
-        ]
-        const ownedBySepoliaMinter = await deploySafeMock(signer, [sepoliaMinters[0]])
+        const sepoliaMinter = '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3'
+        const ownedBySepoliaMinter = await makeSafeProxy([sepoliaMinter])
         const errorOf = (minters?: (string | undefined)[]) =>
-            getGuardian(hreWithGuardian(ownedBySepoliaMinter, undefined, minters)).then(
-                () => undefined,
-                (e: Error) => e
-            )
-        expect((await errorOf(sepoliaMinters))?.message).to.match(
-            /must be a Safe with plain-key owners, no modules and no guard/
-        )
-        expect(await errorOf()).to.be.undefined // with mainnet's minters it is accepted
-        expect((await errorOf([undefined, undefined]))?.message).to.match(
+            guardianError(hreWithGuardian(ownedBySepoliaMinter, undefined, minters))
+        expect(await errorOf([sepoliaMinter, sepoliaMinter])).to.match(/may be the admin, a minter/)
+        expect(await errorOf()).to.equal(undefined) // with mainnet's minters it is accepted
+        // The guardian itself configured as a minter.
+        expect(await errorOf([ownedBySepoliaMinter, HIGH_MINTER])).to.match(/may be the admin, a minter/)
+        expect(await errorOf([undefined, undefined])).to.match(
             /No minters for network "hardhat": set namedAccounts\.lowMinter/
         )
     })

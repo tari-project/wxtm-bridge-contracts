@@ -12,7 +12,6 @@ import {
     getAdmin,
     getGuardian,
     implementationOptions,
-    safeInfo,
     slotAddress,
 } from '../utils/admin'
 import verify from '../utils/verify'
@@ -50,8 +49,11 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
         throw new Error('--contract must be wXTMController or wXTMBridge')
     }
     const name = args.contract as Name
+    // Build from the current sources, so the printed commit is what the artifacts were compiled from.
+    if (!args.check) await hre.run('compile')
     const admin = await getAdmin(hre)
-    const guardian = await getGuardian(hre)
+    const guardianSafe = await getGuardian(hre, { deploying: args.deployImplementation })
+    const { guardian } = guardianSafe
     const records = [name, `${name}_Implementation`, `${name}_Proxy`]
     const missing = []
     for (const record of records) if (!(await hre.deployments.getOrNull(record))) missing.push(record)
@@ -91,27 +93,32 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
     if (!args.check && hre.network.live && git('status', '--porcelain', 'contracts') !== '') {
         throw new Error('contracts/ has uncommitted changes: build the upgrade from a committed checkout')
     }
-    // Always the CREATE2 implementation deploy/wxtm would use, so the records match what the scripts compute.
-    const { deployer } = await hre.getNamedAccounts()
+    // Always the CREATE2 implementation deploy/wxtm would use, so the records match what the scripts compute. Computed
+    // here, so print and --check need no deployer key (a second person can reproduce the output).
     const { deterministicDeployment: salt, ...options } = implementationOptions(name)
-    const create2 = await hre.deployments.deterministic(`${name}_Implementation`, {
-        ...options,
-        salt,
-        from: deployer,
-        log: true,
-        waitConfirmations: hre.network.live ? 5 : 1,
-    })
+    const artifact = await hre.deployments.getExtendedArtifact(name)
+    const initCodeHash = ethers.utils.keccak256(artifact.bytecode)
+    const implementation = ethers.utils.getCreate2Address(CREATE2_FACTORY, salt, initCodeHash)
     if (args.deployImplementation) {
+        const { deployer } = await hre.getNamedAccounts()
+        const create2 = await hre.deployments.deterministic(`${name}_Implementation`, {
+            ...options,
+            salt,
+            from: deployer,
+            log: true,
+            waitConfirmations: hre.network.live ? 5 : 1,
+        })
+        if (create2.address.toLowerCase() !== implementation.toLowerCase()) {
+            throw new Error(`hardhat-deploy would deploy ${create2.address}, not CREATE2 address ${implementation}`)
+        }
         // deploy() records it as <name>_Implementation; only --check may, once the proxy runs it.
         const previous = await hre.deployments.getOrNull(`${name}_Implementation`)
         await create2.deploy()
         if (previous) await hre.deployments.save(`${name}_Implementation`, previous)
         else await hre.deployments.delete(`${name}_Implementation`)
-        await verify(hre, create2.address, [])
+        await verify(hre, implementation, [])
     }
-    const implementation = create2.address
     const recorded = (await hre.deployments.get(`${name}_Implementation`)).address
-    const artifact = await hre.deployments.getExtendedArtifact(name)
     const code = await hre.ethers.provider.getCode(implementation)
     if (code.toLowerCase() !== artifact.deployedBytecode?.toLowerCase()) {
         throw new Error(`${implementation} is not the compiled ${name}: pass --deploy-implementation`)
@@ -133,24 +140,19 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
     }
 
     // What a second person reproduces from the same commit before anyone signs (GUIDE.md, "Before signing").
-    const initCodeHash = ethers.utils.keccak256(artifact.bytecode)
-    if (
-        ethers.utils.getCreate2Address(CREATE2_FACTORY, salt, initCodeHash) !== ethers.utils.getAddress(implementation)
-    ) {
-        throw new Error(`${implementation} is not CREATE2(${CREATE2_FACTORY}, ${salt}, ${initCodeHash})`)
-    }
     const commit = git('rev-parse', 'HEAD')
-    console.log(`Commit: ${commit}`)
+    console.log(
+        `Commit: ${commit} (remote branches containing it: ${git('branch', '-r', '--contains', commit).split(/\s+/).join(' ') || 'none'})`
+    )
     console.log(`${name} init-code hash: ${initCodeHash}`)
     console.log(`CREATE2 factory ${CREATE2_FACTORY}, salt ${salt} => implementation ${implementation}`)
 
     // The proxy may already run it after a plain upgrade() without the setup: upgradeAndCall finishes that.
     const { setup, data } = upgradeCalldata(name, proxy.address, implementation, admin, guardian)
     console.log(`${name} ${proxy.address} runs ${running}`)
-    const safe = await safeInfo(hre, guardian)
     console.log(
-        `Guardian Safe ${guardian}: ${safe?.threshold} of ${safe?.owners.join(', ')}; ` +
-            `modules: ${safe?.modules.join(', ') || 'none'}; guard: ${safe?.guard === ethers.constants.AddressZero ? 'none' : safe?.guard}`
+        `Guardian Safe ${guardian}: ${guardianSafe.threshold} of ${guardianSafe.owners.join(', ')}; ` +
+            `official SafeProxy and singleton, no modules, no guards`
     )
     console.log(`ProxyAdmin owner ${owner} sends to ProxyAdmin ${proxyAdmin} (value 0):`)
     console.log(`upgradeAndCall(proxy ${proxy.address}, implementation ${implementation}, ${setup})`)

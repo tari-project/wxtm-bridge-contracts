@@ -22,10 +22,10 @@ const deploy: DeployFunction = async (hre) => {
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
-    const guardian = await getGuardian(hre)
     // Existing proxies are only checked: upgrades go through upgrade-calldata:wxtm, and deploy() would also deploy a
     // stray ProxyAdmin for the current admin (its CREATE2 address need not match the proxy's real ProxyAdmin).
     const existing = await deployments.getOrNull(contractName)
+    const { guardian } = await getGuardian(hre, { deploying: !existing })
     if (existing) {
         await assertUpgraded(hre, contractName, existing, admin, guardian)
         console.log(`${contractName} ${existing.address} runs ${existing.implementation} and is set up; nothing to do`)

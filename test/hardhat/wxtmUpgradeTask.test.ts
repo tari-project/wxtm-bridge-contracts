@@ -7,7 +7,7 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types'
 import { INITIALIZABLE_SLOT, SETUP_VERSION, upgradeCalldata, upgradeCalldataAction } from '../../tasks/wxtm'
 import { implementationOptions } from '../../utils/admin'
 
-import { deploySafeMock } from './safeMock'
+import { makeSafeProxy } from './safeMock'
 
 const refusal = (promise: Promise<unknown>) =>
     promise.then(
@@ -52,13 +52,13 @@ describe('upgrade-calldata:wxtm', function () {
             const [deployer, ...others] = await hre.ethers.getSigners()
             ;[admin, stranger] = others
             from = deployer.address
-            guardian = await deploySafeMock(deployer, ['0x7777777777777777777777777777777777777777'])
+            guardian = await makeSafeProxy(['0x7777777777777777777777777777777777777777'])
         })
 
         const run = (
             contract: 'wXTMBridge' | 'wXTMController',
             flags: { deployImplementation?: boolean; check?: boolean },
-            configured: { admin?: string; guardian?: string } = {}
+            configured: { admin?: string; guardian?: string; deployer?: string } = {}
         ) =>
             upgradeCalldataAction(
                 { contract, deployImplementation: false, check: false, ...flags },
@@ -67,7 +67,7 @@ describe('upgrade-calldata:wxtm', function () {
                         // Mainnet's minters; any addresses other than the guardian's owners.
                         lowMinter: '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
                         highMinter: '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                        deployer: from,
+                        deployer: 'deployer' in configured ? configured.deployer : from,
                         admin: configured.admin ?? admin.address,
                         guardian: configured.guardian ?? guardian,
                     }),
@@ -117,6 +117,9 @@ describe('upgrade-calldata:wxtm', function () {
             )
             expect(await hre.ethers.provider.getCode(tx?.implementation ?? '')).to.not.equal('0x')
             expect(tx?.commit).to.match(/^[0-9a-f]{40}$/)
+            // A second person, without the deployer key, reproduces the same transaction.
+            const reproduced = await run('wXTMBridge', {}, { deployer: undefined })
+            expect(reproduced).to.deep.equal(tx)
             // Not recorded until the proxy runs it.
             expect((await deployments.get('wXTMBridge_Implementation')).address).to.equal(recordedBefore)
             expect(await refusal(run('wXTMBridge', { check: true }))).to.match(/not upgraded and set up/)
@@ -125,7 +128,7 @@ describe('upgrade-calldata:wxtm', function () {
             expect(await initializedVersion(before.address)).to.equal(SETUP_VERSION.wXTMBridge)
             expect(await refusal(run('wXTMBridge', {}))).to.match(/already runs 0x.* and is set up/)
             // Set up already, but with another guardian than configured: name the failed check, print nothing.
-            const otherGuardian = await deploySafeMock(admin, ['0x7777777777777777777777777777777777777777'])
+            const otherGuardian = await makeSafeProxy(['0x7777777777777777777777777777777777777777'])
             expect(await refusal(run('wXTMBridge', {}, { guardian: otherGuardian }))).to.match(
                 /guardian 0x.* lacks PAUSER_ROLE/
             )
