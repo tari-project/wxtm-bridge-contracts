@@ -17,8 +17,14 @@ Built and published by `.github/workflows/npm-publish.yml` (renamed from `publis
 
 ### Changes
 
-- The publish workflow is now `.github/workflows/npm-publish.yml`. A read-only job builds and packs the tarball, and a separate job publishes exactly that tarball. npm's trusted publisher names the new file, so the old `publish.yml` on earlier tags and commits can no longer publish.
+- The publish workflow is now `.github/workflows/npm-publish.yml`. A read-only job builds and packs the tarball. A second job, which installs nothing, checks the packed name, version and `deployments.json` against the tag and the committed file. A third job publishes exactly that tarball. npm's trusted publisher names the new file, so the old `publish.yml` on earlier tags and commits can no longer publish.
 - `deployments.json` now holds exactly the records committed in `deployments/<network>/*.json`, plus `wTARIBridgeStartBlock`. The build checks this before packing.
+
+After publishing, the owner deprecates the earlier versions:
+
+```sh
+npm deprecate '@tari-project/wxtm-bridge-contracts@<0.3.0' 'wrong DefaultProxyAdmin and LayerZero entries; upgrade to >=0.3.0'
+```
 
 ## 0.2.1 (2026-11-17)
 

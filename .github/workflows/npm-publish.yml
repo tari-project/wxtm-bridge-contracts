@@ -98,9 +98,57 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Publishes the exact tarball built above: no checkout, no install, no project scripts.
-  publish:
+  # Checks the packed tarball without installing anything or running repository code: build ran dependency code
+  # (hardhat plugins, typechain, tsc) after verify:wtari-package, so the packed contents are checked again here.
+  check:
     needs: build
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout the committed deployments.json"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: wxtm-bridge-contracts-typechain/deployments/deployments.json
+          sparse-checkout-cone-mode: false
+
+      - name: "Download package"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package
+
+      - name: "Check package name, version, digest and deployments.json"
+        env:
+          TAG: ${{ github.ref_name }}
+          TARBALL: ${{ needs.build.outputs.tarball }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+          COMMITTED: wxtm-bridge-contracts-typechain/deployments/deployments.json
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          version="${TAG##*@v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag $TAG has no X.Y.Z version"
+          [ "$TARBALL" = "tari-project-wxtm-bridge-contracts-$version.tgz" ] || fail "tarball $TARBALL is not for $version"
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 $SHA256"
+          echo "$SHA256  $RUNNER_TEMP/package/$TARBALL" | sha256sum -c -
+          dir=$(mktemp -d)
+          tar -xzf "$RUNNER_TEMP/package/$TARBALL" -C "$dir" --no-same-owner --no-same-permissions
+          for file in package/package.json package/deployments/deployments.json; do
+            [ -f "$dir/$file" ] && [ ! -L "$dir/$file" ] || fail "$file is missing or not a regular file"
+          done
+          name=$(jq -r '.name' "$dir/package/package.json")
+          packed=$(jq -r '.version' "$dir/package/package.json")
+          [ "$name" = "@tari-project/wxtm-bridge-contracts" ] || fail "package name is $name"
+          [ "$packed" = "$version" ] || fail "package version $packed is not the tag's $version"
+          cmp "$dir/package/deployments/deployments.json" "$COMMITTED" ||
+            fail "packed deployments.json differs from the committed one"
+          echo "package $name@$packed matches the tag, and its deployments.json the committed file"
+
+  # Publishes the exact tarball built and checked above: no checkout, no install, no project scripts.
+  publish:
+    needs: [build, check]
     environment: npm-publish
     permissions:
       id-token: write
@@ -122,11 +170,14 @@ jobs:
 
       - name: "Check package digest"
         env:
+          TAG: ${{ github.ref_name }}
           TARBALL: ${{ needs.build.outputs.tarball }}
           SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
-          [[ "$TARBALL" =~ ^tari-project-wxtm-bridge-contracts-[0-9]+\.[0-9]+\.[0-9]+\.tgz$ ]]
+          version="${TAG##*@v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [ "$TARBALL" = "tari-project-wxtm-bridge-contracts-$version.tgz" ]
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]
           echo "$SHA256  $RUNNER_TEMP/package/$TARBALL" | sha256sum -c -
 
