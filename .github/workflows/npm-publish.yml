@@ -106,7 +106,7 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout the committed package.json and deployments.json"
+      - name: "Checkout the committed package files, deployments/ and the manifest check"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -115,6 +115,8 @@ jobs:
             wxtm-bridge-contracts-typechain/deployments/deployments.json
             wxtm-bridge-contracts-typechain/README.md
             wxtm-bridge-contracts-typechain/CHANGELOG.md
+            /deployments/
+            /utils/deployments-manifest.ts
           sparse-checkout-cone-mode: false
 
       - name: "Download package"
@@ -223,6 +225,7 @@ jobs:
           COMMITTED_DEPLOYMENTS: wxtm-bridge-contracts-typechain/deployments/deployments.json
         run: |
           set -euo pipefail
+          echo "node $(node -v), npm $(npm -v), node-tar $(jq -r .version "$(npm root -g)/npm/node_modules/tar/package.json")"
           archive="$RUNNER_TEMP/package/$TARBALL"
           tar --ignore-zeros -tzf "$archive" > "$RUNNER_TEMP/gnu-paths" 2> "$RUNNER_TEMP/gnu-paths.err"
           if [ -s "$RUNNER_TEMP/gnu-paths.err" ]; then
@@ -364,6 +367,51 @@ jobs:
           EOF
           node "$RUNNER_TEMP/check-tar.js" "$archive" "$(npm root -g)" "$RUNNER_TEMP/gnu-paths" \
             "$RUNNER_TEMP/gnu-extract" "$COMMITTED_PACKAGE" "$COMMITTED_DEPLOYMENTS"
+
+      # The D1 exact-match check again, outside the build job (which runs dependency code): the packed
+      # deployments.json must hold exactly the committed deployments/<network>/*.json records. This runs one
+      # repository file, utils/deployments-manifest.ts from the tagged commit (Node builtins only), with Node's
+      # type stripping; nothing is installed.
+      - name: "Check deployments.json against deployments/<network>"
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/check-manifest.mts" << 'EOF'
+          import { readFileSync } from 'node:fs'
+          import { pathToFileURL } from 'node:url'
+          const [modulePath, manifestFile, deploymentsDir] = process.argv.slice(2)
+          const { packageDeploymentProblems } = await import(pathToFileURL(modulePath).href)
+          const problems = packageDeploymentProblems(JSON.parse(readFileSync(manifestFile, 'utf8')), deploymentsDir)
+          for (const problem of problems) console.log(`::error::${problem}`)
+          if (problems.length > 0) process.exit(1)
+          console.log('packed deployments.json matches deployments/<network> exactly')
+          EOF
+          node "$RUNNER_TEMP/check-manifest.mts" "$PWD/utils/deployments-manifest.ts" \
+            "$RUNNER_TEMP/gnu-extract/package/deployments/deployments.json" "$PWD/deployments"
+
+      # Runs only if every check above passed. Approvers use this job's log and summary, not the build job's.
+      - name: "Record the checked package for the approver"
+        env:
+          TARBALL: ${{ needs.build.outputs.tarball }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          paths="$RUNNER_TEMP/gnu-paths"
+          count=$(wc -l < "$paths" | tr -d " ")
+          echo "Checked $TARBALL, sha256 $SHA256, $count files:"
+          cat "$paths"
+          {
+            echo "### Checked package"
+            echo
+            echo "\`$TARBALL\` sha256 \`$SHA256\`, $count files (GNU tar listing)."
+            echo
+            echo "<details><summary>File list</summary>"
+            echo
+            echo '```text'
+            cat "$paths"
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Publishes the exact tarball built and checked above: no checkout, no install, no project scripts.
   publish:
