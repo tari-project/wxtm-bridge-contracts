@@ -985,6 +985,7 @@ describe('verify:wtari-package (offline)', function () {
     it('skips malformed chain entries (packageDeploymentProblems reports them)', async function () {
         const malformed = JSON.parse('{"1": null, "11155111": [], "84532": 5}')
         expect(await wtariPackageProblems(hre, malformed)).to.deep.equal([])
+        expect(await wtariPackageProblems(hre, JSON.parse('null'))).to.deep.equal([])
     })
 
     it('passes an honest entry and leaves chains without wTARI alone', async function () {

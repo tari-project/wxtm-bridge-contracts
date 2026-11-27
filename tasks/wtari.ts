@@ -1394,6 +1394,8 @@ export async function wtariPackageProblems(
     exported: { [chainId: string]: ExportedEntry }
 ) {
     const problems: string[] = []
+    // A malformed top-level value is reported by packageDeploymentProblems.
+    if (typeof exported !== 'object' || exported === null) return problems
     for (const [chainId, entry] of Object.entries(exported)) {
         // Malformed entries (null, arrays, scalars) are reported by packageDeploymentProblems.
         if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue

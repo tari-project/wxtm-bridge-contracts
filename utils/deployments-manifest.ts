@@ -211,6 +211,9 @@ export function packageDeploymentProblems(
     manifest: Manifest<{ [key: string]: string | number }>,
     deploymentsDir: string
 ) {
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+        return ['deployments.json is not an object of chain entries']
+    }
     const problems: string[] = []
     const chains = localDeploymentChains(deploymentsDir)
     for (const [chainId, networks] of Object.entries(chains)) {

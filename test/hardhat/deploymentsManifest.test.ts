@@ -192,6 +192,14 @@ describe('package deployments.json against deployments/<network>', function () {
         ])
     })
 
+    it('reports a top-level value that is not an object instead of throwing', function () {
+        for (const value of ['null', '[]', '5']) {
+            expect(packageDeploymentProblems(JSON.parse(value), dir)).to.deep.equal([
+                'deployments.json is not an object of chain entries',
+            ])
+        }
+    })
+
     it('rejects two deployment directories for one chain', function () {
         network('mainnet-copy', '1', { wXTM: B })
         const problems = packageDeploymentProblems({ 1: { wXTM: B } }, dir)
