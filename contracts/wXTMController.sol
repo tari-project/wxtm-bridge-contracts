@@ -86,11 +86,18 @@ contract wXTMController is AccessControlUpgradeable, PausableUpgradeable {
     }
 
     function _initializePauser(address guardian) private {
-        // The guardian is a Safe and pause-only, so never the admin. A key cannot qualify: an EOA has no code, and an
-        // EIP-7702 delegated EOA has the code 0xef0100 || delegate.
+        // The guardian is a Safe and pause-only, so never the admin or a minter. A key cannot qualify: an EOA has no
+        // code, and an EIP-7702 delegated EOA has the code 0xef0100 || delegate. A ProxyAdmin cannot call through its
+        // proxy, so it could never pause.
         bytes memory code = guardian.code;
-        if (code.length == 0 || bytes3(code) == 0xef0100 || hasRole(DEFAULT_ADMIN_ROLE, guardian))
-            revert InvalidGuardian();
+        if (
+            code.length == 0 ||
+            bytes3(code) == 0xef0100 ||
+            hasRole(DEFAULT_ADMIN_ROLE, guardian) ||
+            hasRole(LOW_MINTER_ROLE, guardian) ||
+            hasRole(HIGH_MINTER_ROLE, guardian) ||
+            guardian == ERC1967Utils.getAdmin()
+        ) revert InvalidGuardian();
         __Pausable_init();
 
         _grantRole(PAUSER_ROLE, guardian);

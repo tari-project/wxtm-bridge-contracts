@@ -18,10 +18,29 @@ export async function getAdmin(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAcc
     return admin
 }
 
+/** The wXTMController low and high minter Safes deploy/wxtm grants on a new controller. */
+export const MINTERS = ['0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee', '0xFa2459708A9549C371963a3fCd239dd614E8D52C']
+
+/** Owners and threshold of the Safe at `address`, or undefined when it does not answer as a Safe. */
+export async function safeOwners(hre: Pick<HardhatRuntimeEnvironment, 'ethers'>, address: string) {
+    const safe = new ethers.Contract(
+        address,
+        ['function getOwners() view returns (address[])', 'function getThreshold() view returns (uint256)'],
+        hre.ethers.provider
+    )
+    try {
+        return { owners: (await safe.getOwners()) as string[], threshold: (await safe.getThreshold()).toNumber() }
+    } catch (e) {
+        if ((e as { code?: string }).code === 'CALL_EXCEPTION') return undefined
+        throw e
+    }
+}
+
 /**
  * The `guardian` named account for this network: the Safe that may pause wXTMBridge and wXTMController (only the
- * admin can unpause). Like the admin, never falls back to the deployer; must be a contract (the contracts refuse an
- * EOA guardian too) other than the admin and the deployer.
+ * admin can unpause). Like the admin, never falls back to the deployer. Must answer as a Safe (not a key, a
+ * ProxyAdmin or a token), and neither it nor its owners may be the admin, the deployer or a minter: a compromised
+ * key there must not also be the only fast pauser.
  */
 export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamedAccounts' | 'network' | 'ethers'>) {
     const { guardian, admin, deployer } = await hre.getNamedAccounts()
@@ -31,11 +50,15 @@ export async function getGuardian(hre: Pick<HardhatRuntimeEnvironment, 'getNamed
                 `to the Safe that must hold PAUSER_ROLE.`
         )
     }
-    const isAdminOrDeployer = [admin, deployer].some((a) => a?.toLowerCase() === guardian.toLowerCase())
-    // No code: an EOA; 0xef0100: an EIP-7702 delegated EOA. Either is a key, not a Safe.
-    const code = await hre.ethers.provider.getCode(guardian)
-    if (isAdminOrDeployer || code === '0x' || code.toLowerCase().startsWith('0xef0100')) {
-        throw new Error(`Guardian ${guardian} on "${hre.network.name}" must be a Safe, not the admin or the deployer.`)
+    // 0xef0100: an EIP-7702 delegated EOA, a key even if its delegate answers like a Safe.
+    const delegated = (await hre.ethers.provider.getCode(guardian)).toLowerCase().startsWith('0xef0100')
+    const safe = delegated ? undefined : await safeOwners(hre, guardian)
+    const forbidden = [admin, deployer, ...MINTERS].filter(Boolean).map((a) => a.toLowerCase())
+    if (!safe || [guardian, ...safe.owners].some((a) => forbidden.includes(a.toLowerCase()))) {
+        throw new Error(
+            `Guardian ${guardian} on "${hre.network.name}" must be a Safe that is not, and is not owned by, ` +
+                `the admin, the deployer or a minter.`
+        )
     }
     return guardian
 }

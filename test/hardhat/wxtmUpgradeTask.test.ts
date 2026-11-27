@@ -7,6 +7,8 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types'
 import { INITIALIZABLE_SLOT, SETUP_VERSION, upgradeCalldata, upgradeCalldataAction } from '../../tasks/wxtm'
 import { implementationOptions } from '../../utils/admin'
 
+import { deploySafeMock } from './safeMock'
+
 const refusal = (promise: Promise<unknown>) =>
     promise.then(
         () => undefined,
@@ -50,8 +52,7 @@ describe('upgrade-calldata:wxtm', function () {
             const [deployer, ...others] = await hre.ethers.getSigners()
             ;[admin, stranger] = others
             from = deployer.address
-            // Any contract stands in for the guardian Safe.
-            guardian = (await deployments.deploy('GuardianStandIn', { contract: 'wTARIBridge', from })).address
+            guardian = await deploySafeMock(deployer, ['0x7777777777777777777777777777777777777777'])
         })
 
         const run = (
@@ -113,7 +114,7 @@ describe('upgrade-calldata:wxtm', function () {
             expect(await initializedVersion(before.address)).to.equal(SETUP_VERSION.wXTMBridge)
             expect(await refusal(run('wXTMBridge', {}))).to.match(/already runs 0x.* and is set up/)
             // Set up already, but with another guardian than configured: name the failed check, print nothing.
-            const otherGuardian = (await deployments.deploy('OtherGuardian', { contract: 'wTARIBridge', from })).address
+            const otherGuardian = await deploySafeMock(admin, ['0x7777777777777777777777777777777777777777'])
             expect(await refusal(run('wXTMBridge', {}, { guardian: otherGuardian }))).to.match(
                 /guardian 0x.* lacks PAUSER_ROLE/
             )

@@ -1,8 +1,18 @@
 import { expect } from 'chai'
 import { ethers } from 'ethers'
-import { deployments } from 'hardhat'
+import hre, { deployments } from 'hardhat'
+import { HardhatRuntimeEnvironment } from 'hardhat/types'
 
-import { assertNotListedElsewhere, assertUpgraded, chainDeployments, getAdmin, getGuardian } from '../../utils/admin'
+import {
+    MINTERS,
+    assertNotListedElsewhere,
+    assertUpgraded,
+    chainDeployments,
+    getAdmin,
+    getGuardian,
+} from '../../utils/admin'
+
+import { deploySafeMock } from './safeMock'
 
 const ADMIN = '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB'
 
@@ -10,12 +20,10 @@ function hreWithAdmin(admin?: string) {
     return { network: { name: 'mainnet' }, getNamedAccounts: async () => (admin ? { admin } : {}) } as never
 }
 
-function hreWithGuardian(guardian?: string, code = '0x6080', deployer = '0x1111111111111111111111111111111111111111') {
-    return {
-        network: { name: 'mainnet' },
+function hreWithGuardian(guardian?: string, deployer = '0x1111111111111111111111111111111111111111') {
+    return Object.assign(Object.create(hre), {
         getNamedAccounts: async () => ({ guardian, admin: ADMIN, deployer }),
-        ethers: { provider: { getCode: async () => code } },
-    } as never
+    }) as HardhatRuntimeEnvironment
 }
 
 describe('admin from named config', function () {
@@ -44,26 +52,34 @@ describe('admin from named config', function () {
         for (const guardian of [undefined, ethers.constants.AddressZero]) {
             let error: Error | undefined
             await getGuardian(hreWithGuardian(guardian)).catch((e: Error) => (error = e))
-            expect(error?.message).to.match(/set namedAccounts\.guardian\["mainnet"\]/)
+            expect(error?.message).to.match(/set namedAccounts\.guardian\["hardhat"\]/)
         }
     })
 
-    it('returns the configured guardian', async function () {
-        const guardian = '0x3333333333333333333333333333333333333333'
-        expect(await getGuardian(hreWithGuardian(guardian))).to.equal(guardian)
-    })
+    it('returns a configured guardian Safe, and rejects keys, other contracts and Safes owned by the admin, the deployer or a minter', async function () {
+        const [signer, owner] = await hre.ethers.getSigners()
+        const DEPLOYER = '0x1111111111111111111111111111111111111111'
+        const safe = await deploySafeMock(signer, [owner.address])
+        expect(await getGuardian(hreWithGuardian(safe))).to.equal(safe)
 
-    it('rejects a guardian that is not a contract (or is a delegated EOA), or is the admin or the deployer', async function () {
-        const guardian = '0x3333333333333333333333333333333333333333'
-        for (const hre of [
-            hreWithGuardian(guardian, '0x'),
-            hreWithGuardian(guardian, '0xef01007a664368c486cd924caf5ba9bd56b2e9f19dd72b'),
-            hreWithGuardian(ADMIN.toLowerCase()),
-            hreWithGuardian(guardian, '0x6080', guardian),
+        const delegated = '0x5555555555555555555555555555555555555555'
+        await hre.network.provider.send('hardhat_setCode', [delegated, `0xef0100${safe.slice(2)}`])
+        const minterSafe = MINTERS[0]
+        await hre.network.provider.send('hardhat_setCode', [minterSafe, await hre.ethers.provider.getCode(safe)])
+        const notASafe = (await (await hre.ethers.getContractFactory('wTARIBridge')).deploy()).address
+        for (const guardian of [
+            owner.address, // a key
+            delegated, // an EIP-7702 delegated key
+            ADMIN,
+            notASafe, // e.g. a ProxyAdmin or a token
+            minterSafe,
+            await deploySafeMock(signer, [owner.address, ADMIN]),
+            await deploySafeMock(signer, [DEPLOYER]),
+            await deploySafeMock(signer, [MINTERS[1]]),
         ]) {
             let error: Error | undefined
-            await getGuardian(hre).catch((e: Error) => (error = e))
-            expect(error?.message).to.match(/must be a Safe, not the admin or the deployer/)
+            await getGuardian(hreWithGuardian(guardian, DEPLOYER)).catch((e: Error) => (error = e))
+            expect(error?.message, guardian).to.match(/must be a Safe that is not, and is not owned by/)
         }
     })
 

@@ -237,6 +237,23 @@ contract wXTMControllerTest is TestHelperOz5 {
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(controller)), implementation, setup);
     }
 
+    function test_rejects_proxy_admin_or_minter_as_guardian() public {
+        for (uint256 i = 0; i < 3; i++) {
+            wXTMController fresh = wXTMController(
+                address(new TransparentUpgradeableProxy(address(new wXTMController()), admin, ""))
+            );
+            address proxyAdmin = address(_proxyAdmin(address(fresh)));
+            // [low minter, high minter, guardian]: the ProxyAdmin as guardian, then the guardian as either minter.
+            address[3][3] memory cases = [
+                [lowMinter, highMinter, proxyAdmin],
+                [guardian, highMinter, guardian],
+                [lowMinter, guardian, guardian]
+            ];
+            vm.expectRevert(wXTMController.InvalidGuardian.selector);
+            fresh.initialize(address(wxtm), cases[i][0], cases[i][1], admin, cases[i][2]);
+        }
+    }
+
     function test_rejects_zero_admin_or_invalid_guardian() public {
         address eoa = makeAddr("eoa");
         address delegated = makeAddr("delegated");

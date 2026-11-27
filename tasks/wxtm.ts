@@ -10,6 +10,7 @@ import {
     getAdmin,
     getGuardian,
     implementationOptions,
+    safeOwners,
     slotAddress,
 } from '../utils/admin'
 import verify from '../utils/verify'
@@ -125,6 +126,8 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
     // The proxy may already run it after a plain upgrade() without the setup: upgradeAndCall finishes that.
     const { setup, data } = upgradeCalldata(name, proxy.address, implementation, admin, guardian)
     console.log(`${name} ${proxy.address} runs ${running}`)
+    const safe = await safeOwners(hre, guardian)
+    console.log(`Guardian Safe ${guardian}: ${safe?.threshold} of ${safe?.owners.join(', ')}`)
     console.log(`ProxyAdmin owner ${owner} sends to ProxyAdmin ${proxyAdmin} (value 0):`)
     console.log(`upgradeAndCall(${proxy.address}, ${implementation}, ${setup})`)
     console.log(`calldata: ${data}`)

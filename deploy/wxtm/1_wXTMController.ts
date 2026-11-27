@@ -2,7 +2,14 @@ import assert from 'assert'
 
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertUpgraded, chainDeployments, getAdmin, getGuardian, implementationOptions } from '../../utils/admin'
+import {
+    MINTERS,
+    assertUpgraded,
+    chainDeployments,
+    getAdmin,
+    getGuardian,
+    implementationOptions,
+} from '../../utils/admin'
 import verify from '../../utils/verify'
 
 const contractName = 'wXTMController'
@@ -46,13 +53,7 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: [
-                        deployedContracts.wXTM,
-                        '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
-                        '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
-                        admin,
-                        guardian,
-                    ],
+                    args: [deployedContracts.wXTM, ...MINTERS, admin, guardian],
                 },
             },
         },

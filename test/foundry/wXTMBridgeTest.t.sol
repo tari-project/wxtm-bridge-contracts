@@ -391,6 +391,14 @@ contract wXTMBridgeTest is TestHelperOz5 {
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(bridge)), implementation, setup);
     }
 
+    function test_rejects_proxy_admin_as_guardian() public {
+        wXTMBridge fresh = wXTMBridge(
+            address(new TransparentUpgradeableProxy(address(new wXTMBridge()), multiSig, ""))
+        );
+        vm.expectRevert(wXTMBridge.InvalidGuardian.selector);
+        fresh.initialize(address(wxtm), multiSig, address(_proxyAdmin(address(fresh))));
+    }
+
     function test_rejects_zero_admin_or_invalid_guardian() public {
         address eoa = makeAddr("eoa");
         address delegated = makeAddr("delegated");
