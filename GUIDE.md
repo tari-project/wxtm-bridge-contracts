@@ -44,7 +44,7 @@ Base Sepolia: 84532
 ### **Deployments**
 
 Proxy (wXTM): 0xcBe79AB990E0Ab45Cb9148db7d434477E49b7374
-Bridge: 0x52610316B50238d0f6259691762179A3d8E87908
+Bridge: none. The earlier testnet bridge 0x52610316B50238d0f6259691762179A3d8E87908 is retired: it has no deployment record and is not in the package.
 
 ### **Using Interactions Scripts**
 
