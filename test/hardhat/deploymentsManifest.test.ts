@@ -175,6 +175,23 @@ describe('package deployments.json against deployments/<network>', function () {
         ])
     })
 
+    it('rejects inherited-name keys, non-numeric chain ids and a non-number start block', function () {
+        // JSON.parse makes "__proto__" an own key; consumers' bundlers may still read it as the prototype.
+        const parsed = JSON.parse(
+            `{"1": {"DefaultProxyAdmin": "${A}", "wXTM": "${B}"},` +
+                ` "84532": {"wXTM": "${B}", "wTARI": "${C}", "__proto__": {"wTARI": "${A}"}, "constructor": "${A}",` +
+                ` "wTARIBridgeStartBlock": "5"}, "__proto__": {"wXTM": "${B}"}, "constructor": {"wXTM": "${B}"}}`
+        )
+        expect(Object.prototype.hasOwnProperty.call(parsed['84532'], '__proto__')).to.equal(true)
+        expect(packageDeploymentProblems(parsed, dir)).to.deep.equal([
+            'chain 84532: __proto__ has no deployments/base-sepolia-testnet/__proto__.json',
+            'chain 84532: constructor has no deployments/base-sepolia-testnet/constructor.json',
+            'chain 84532: wTARIBridgeStartBlock is not a number',
+            'chain __proto__: not a decimal chain id',
+            'chain constructor: not a decimal chain id',
+        ])
+    })
+
     it('rejects two deployment directories for one chain', function () {
         network('mainnet-copy', '1', { wXTM: B })
         const problems = packageDeploymentProblems({ 1: { wXTM: B } }, dir)

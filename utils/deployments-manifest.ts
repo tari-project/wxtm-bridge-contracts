@@ -166,6 +166,9 @@ export async function updateManifestEntry<T>(
 /** The only key a package entry may carry beyond the committed deployment records (written by export-deployments). */
 export const PACKAGE_EXTRA_KEYS = ['wTARIBridgeStartBlock']
 
+// Own keys only: `in` also sees inherited keys such as constructor, toString or __proto__.
+const hasOwn = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key)
+
 /**
  * Addresses of the committed hardhat-deploy records in one network directory (`deployments/<network>/*.json`),
  * by record name. Only these records belong in the package: hardhat-deploy's `deployments.all()` also returns
@@ -179,7 +182,9 @@ export function localDeploymentAddresses(networkDir: string): { [name: string]: 
         if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
             throw new Error(`${path.join(networkDir, file)} has no valid address`)
         }
-        addresses[path.basename(file, '.json')] = address
+        const name = path.basename(file, '.json')
+        if (name === '__proto__') throw new Error(`${path.join(networkDir, file)}: invalid record name`)
+        addresses[name] = address
     }
     return addresses
 }
@@ -191,6 +196,7 @@ export function localDeploymentChains(deploymentsDir: string) {
         const chainIdFile = path.join(deploymentsDir, network, '.chainId')
         if (!fs.existsSync(chainIdFile)) continue
         const chainId = fs.readFileSync(chainIdFile, 'utf8').trim()
+        if (!/^\d+$/.test(chainId)) throw new Error(`${chainIdFile}: ${chainId} is not a decimal chain id`)
         ;(chains[chainId] ??= []).push(network)
     }
     return chains
@@ -212,27 +218,36 @@ export function packageDeploymentProblems(
             problems.push(`chain ${chainId}: several deployment directories (${networks.join(', ')})`)
             continue
         }
-        const entry = manifest[chainId]
-        if (entry === undefined) {
+        if (!hasOwn(manifest, chainId)) {
             problems.push(`chain ${chainId}: missing from the package (deployments/${networks[0]} exists)`)
             continue
         }
+        const entry: unknown = manifest[chainId]
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+            problems.push(`chain ${chainId}: entry is not an object`)
+            continue
+        }
+        const values = entry as { [key: string]: unknown }
         const local = localDeploymentAddresses(path.join(deploymentsDir, networks[0]))
         for (const [name, address] of Object.entries(local)) {
-            if (!(name in entry)) problems.push(`chain ${chainId}: missing ${name}`)
-            else if (entry[name] !== address) {
-                problems.push(`chain ${chainId}: ${name} is ${entry[name]}, deployments/${networks[0]} has ${address}`)
+            if (!hasOwn(values, name)) problems.push(`chain ${chainId}: missing ${name}`)
+            else if (values[name] !== address) {
+                problems.push(`chain ${chainId}: ${name} is ${values[name]}, deployments/${networks[0]} has ${address}`)
             }
         }
-        for (const key of Object.keys(entry)) {
-            if (!(key in local) && !PACKAGE_EXTRA_KEYS.includes(key)) {
+        for (const key of Object.keys(values)) {
+            if (PACKAGE_EXTRA_KEYS.includes(key)) {
+                if (typeof values[key] !== 'number') problems.push(`chain ${chainId}: ${key} is not a number`)
+            } else if (!hasOwn(local, key)) {
                 problems.push(`chain ${chainId}: ${key} has no deployments/${networks[0]}/${key}.json`)
             }
         }
     }
     for (const chainId of Object.keys(manifest)) {
-        if (!(chainId in chains))
+        if (!/^\d+$/.test(chainId)) problems.push(`chain ${chainId}: not a decimal chain id`)
+        else if (!hasOwn(chains, chainId)) {
             problems.push(`chain ${chainId}: no deployments/<network> directory with this .chainId`)
+        }
     }
     return problems
 }
