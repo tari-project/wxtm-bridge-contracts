@@ -1200,10 +1200,9 @@ describe('export-deployments wTARI gate', function () {
         throw new Error('check failed')
     }
 
-    it('exports wXTM-only networks unchanged and keeps earlier wTARI keys when there are no wTARI records', async function () {
-        const previous = { wXTM: '0x01', wTARI: '0x0a', wTARIBridgeStartBlock: 7 }
-        const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
-        expect(entry).to.deep.equal({ ...previous, ...wxtm })
+    it('exports wXTM-only networks exactly as their records', async function () {
+        const { entry, wtariFailed } = await exportedChainEntry({ wXTM: '0x01' }, wxtm, undefined, failing)
+        expect(entry).to.deep.equal(wxtm)
         expect(wtariFailed).to.equal(false)
     })
 
@@ -1213,6 +1212,16 @@ describe('export-deployments wTARI gate', function () {
         const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, undefined, failing)
         expect(entry).to.deep.equal(wxtm)
         expect(wtariFailed).to.equal(false)
+    })
+
+    it('drops earlier wTARI keys and the start block when the chain has no wTARI records', async function () {
+        const previous = { ...wxtm, ...wtari, wTARIBridgeStartBlock: 7 }
+        // With or without a configured start block, and without running the check.
+        for (const configured of [undefined, 7]) {
+            const { entry, wtariFailed } = await exportedChainEntry(previous, wxtm, configured, failing)
+            expect(entry).to.deep.equal(wxtm)
+            expect(wtariFailed).to.equal(false)
+        }
     })
 
     it('exports a new wTARI set only after the check passes, with the proven start block', async function () {

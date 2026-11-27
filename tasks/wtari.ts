@@ -1317,7 +1317,8 @@ export type ExportedEntry = { [key: string]: string | number }
  * WTARI_RECORD_NAMES set: unchanged addresses keep what was exported (and checked) before; new or changed
  * addresses are exported only if `check` (check:wtari, returning the bridge start block) passes. When the set
  * is incomplete, has unexpected wTARI* records, or fails the check, the last good (previously exported) set
- * is kept. Other records are exported exactly as in `addresses`; earlier non-wTARI keys are not kept.
+ * is kept. A chain without wTARI* records gets no wTARI keys, even if earlier exports had some. Other records
+ * are exported exactly as in `addresses`; earlier non-wTARI keys are not kept.
  */
 export async function exportedChainEntry(
     previous: ExportedEntry,
@@ -1349,18 +1350,16 @@ export async function exportedChainEntry(
         previousAddresses.length === names.length &&
         previousAddresses.every(([key, value]) => wtariAddresses[key] === value)
 
-    // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
-    // not block exports of an unchanged set.
-    if (names.length === 0) {
-        for (const [key, value] of previousWtari) entry[key] = value
-        return { entry, wtariFailed: false }
-    }
+    // No wTARI records on this chain: export none, dropping any wTARI keys (and start block) exported earlier.
+    if (names.length === 0) return { entry, wtariFailed: false }
     if (configuredStartBlock === undefined) {
         return keepLastGood('the chain config has no bridgeStartBlock; record it from check:wtari first')
     }
     if (names.length !== WTARI_RECORD_NAMES.length || !WTARI_RECORD_NAMES.every((name) => name in wtariAddresses)) {
         return keepLastGood(`wTARI records ${names.join(', ')} are not exactly ${WTARI_RECORD_NAMES.join(', ')}`)
     }
+    // check:wtari is a deploy-time review, so later Safe operations (role rotation, peers, retirement) must
+    // not block exports of an unchanged set.
     if (unchanged) {
         if (previous.wTARIBridgeStartBlock !== configuredStartBlock) {
             return keepLastGood(
