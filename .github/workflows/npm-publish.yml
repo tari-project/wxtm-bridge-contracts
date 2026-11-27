@@ -163,23 +163,35 @@ jobs:
           [ -z "$bad" ] || fail "tarball has entries that are not regular files or directories: $bad"
           bad=$(LC_ALL=C awk '!/^package\/[A-Za-z0-9._@\/-]+$/' "$work/paths")
           [ -z "$bad" ] || fail "tarball has entries outside package/ or with other characters: $bad"
+          # Exactly the package's `files` list plus npm's automatic files. Anything else (binding.gyp, from which
+          # npm would infer an install script, server.js, npm-shrinkwrap.json, .npmrc, ...) fails.
+          allowed='^package/(package\.json|README\.md|CHANGELOG\.md|index\.(js|d\.ts)|deployments/deployments\.json'
+          allowed+='|deployments/index\.(js|d\.ts)|utils/chain\.(js|d\.ts)|typechain/[A-Za-z0-9._@/-]+\.(js|d\.ts))$'
+          # Passed via ENVIRON: awk -v would process the backslash escapes.
+          bad=$(ALLOWED="$allowed" LC_ALL=C awk '$0 !~ ENVIRON["ALLOWED"]' "$work/paths")
+          [ -z "$bad" ] || fail "tarball has entries outside the package's files list: $bad"
           bad=$(awk '/(^|\/)\.\.?(\/|$)/' "$work/paths")
           [ -z "$bad" ] || fail "tarball has . or .. path components: $bad"
           duplicates=$(sed 's://*:/:g; s:/*$::' "$work/paths" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort | LC_ALL=C uniq -d)
           [ -z "$duplicates" ] || fail "tarball has duplicate entries (ignoring case): $duplicates"
-          mkdir "$work/x"
-          gnu_tar /dev/null -xzf "$archive" -C "$work/x" --no-same-owner --no-same-permissions
+          # Extracted where the node-tar step can compare every file with what node-tar reads.
+          extract="$RUNNER_TEMP/gnu-extract"
+          mkdir "$extract"
+          gnu_tar /dev/null -xzf "$archive" -C "$extract" --no-same-owner --no-same-permissions
           for file in package/package.json package/deployments/deployments.json; do
-            [ -f "$work/x/$file" ] && [ ! -L "$work/x/$file" ] || fail "$file is missing or not a regular file"
+            [ -f "$extract/$file" ] && [ ! -L "$extract/$file" ] || fail "$file is missing or not a regular file"
           done
-          # npm pack keeps package.json byte-identical, so no build step can add scripts, dependencies or bin.
-          cmp "$work/x/package/package.json" "$COMMITTED_PACKAGE" ||
+          # npm pack keeps package.json byte-identical, so the packed manifest (scripts, dependencies, bin, and
+          # gypfile: false) is the committed one. npm can still infer scripts from files in the package; the files
+          # allowlist above rejects those (such as binding.gyp).
+          cmp "$extract/package/package.json" "$COMMITTED_PACKAGE" ||
             fail "packed package.json differs from the committed one"
-          name=$(jq -r '.name' "$work/x/package/package.json")
-          packed=$(jq -r '.version' "$work/x/package/package.json")
+          [ "$(jq '.gypfile' "$extract/package/package.json")" = "false" ] || fail "package.json must set gypfile: false"
+          name=$(jq -r '.name' "$extract/package/package.json")
+          packed=$(jq -r '.version' "$extract/package/package.json")
           [ "$name" = "@tari-project/wxtm-bridge-contracts" ] || fail "package name is $name"
           [ "$packed" = "$version" ] || fail "package version $packed is not the tag's $version"
-          cmp "$work/x/package/deployments/deployments.json" "$COMMITTED_DEPLOYMENTS" ||
+          cmp "$extract/package/deployments/deployments.json" "$COMMITTED_DEPLOYMENTS" ||
             fail "packed deployments.json differs from the committed one"
           echo "package $name@$packed matches the tag, and its package.json and deployments.json the committed files"
 
@@ -191,9 +203,10 @@ jobs:
 
       # GNU tar and node-tar read pax, GNU long-name and sparse metadata differently, so only plain ustar
       # file and directory headers are accepted. This step walks the raw headers itself, then parses the
-      # tarball with the node-tar bundled in npm (strict) and requires its entries to equal GNU tar's, in order,
-      # and its package.json and deployments.json bytes to equal the committed files. Nothing is installed and
-      # no repository code runs.
+      # tarball with the node-tar bundled in npm (strict). Its entries must equal GNU tar's in order, with the
+      # raw header sizes, and every file it reads must be byte-identical to GNU tar's extraction (and
+      # package.json and deployments.json to the committed files). Nothing is installed and no repository code
+      # runs.
       - name: "Check the package with npm's node-tar"
         env:
           TARBALL: ${{ needs.build.outputs.tarball }}
@@ -213,18 +226,25 @@ jobs:
           const fs = require('fs')
           const path = require('path')
           const zlib = require('zlib')
-          const [archive, npmRoot, gnuPathsFile, committedPackage, committedDeployments] = process.argv.slice(2)
+          const [archive, npmRoot, gnuPathsFile, gnuExtract, committedPackage, committedDeployments] =
+            process.argv.slice(2)
           const problems = []
           const fail = (message) => problems.push(message)
 
-          // Raw headers: plain ustar ('ustar\0' + '00'), typeflag '0' or '5', valid checksum, octal size, and no
-          // entry after a zero block (node-tar reads past a lone zero block).
+          // Raw headers: plain ustar ('ustar\0' + '00'), typeflag '0' or '5', valid checksum, strictly octal
+          // numbers, and no entry after a zero block (node-tar reads past a lone zero block).
           const raw = zlib.gunzipSync(fs.readFileSync(archive))
           const rawPaths = []
+          const rawSizes = []
+          // Digits first, then only NULs or spaces: node-tar stops at the first NUL, GNU tar skips leading ones.
           const octal = (h, start, end, what, offset) => {
-            const text = h.subarray(start, end).toString('latin1').replace(/^[ \0]+|[ \0]+$/g, '')
-            if (!/^[0-7]+$/.test(text)) fail(`header at ${offset}: ${what} ${JSON.stringify(text)} is not octal`)
-            return parseInt(text, 8)
+            const field = h.subarray(start, end).toString('latin1')
+            const match = new RegExp(`^([0-7]{1,${end - start - 1}})[ \\0]*$`).exec(field)
+            if (!match) {
+              fail(`header at ${offset}: ${what} ${JSON.stringify(field)} is not a plain octal number`)
+              return NaN
+            }
+            return parseInt(match[1], 8)
           }
           const text = (h, start, end) => h.subarray(start, end).toString('utf8').replace(/\0.*$/s, '')
           let offset = 0
@@ -250,26 +270,32 @@ jobs:
             const name = text(h, 0, 100)
             const prefix = text(h, 345, 500)
             rawPaths.push(prefix ? `${prefix}/${name}` : name)
-            offset += 512 + Math.ceil(size / 512) * 512
-            if (!Number.isSafeInteger(size) || offset > raw.length) {
+            rawSizes.push(size)
+            if (!Number.isSafeInteger(size) || offset + 512 + Math.ceil(size / 512) * 512 > raw.length) {
               fail(`header at ${offset}: entry runs past the end of the archive`)
               break
             }
+            offset += 512 + Math.ceil(size / 512) * 512
           }
 
           // npm's own parser, strict: any warning, meta (pax or long-name) or ignored entry fails.
           const tar = require(path.join(npmRoot, 'npm', 'node_modules', 'tar'))
-          const wanted = { 'package/package.json': [], 'package/deployments/deployments.json': [] }
           const nodePaths = []
+          const nodeSizes = []
+          const nodeFiles = new Map() // path -> chunks as node-tar reads them
           const parser = new tar.Parser({
             strict: true,
             onReadEntry: (entry) => {
               nodePaths.push(entry.path)
+              nodeSizes.push(entry.size)
               if (entry.header.typeKey !== '0' && entry.header.typeKey !== '5') {
                 fail(`node-tar entry ${entry.path}: type ${entry.header.typeKey}`)
               }
-              if (Object.prototype.hasOwnProperty.call(wanted, entry.path)) {
-                entry.on('data', (chunk) => wanted[entry.path].push(chunk))
+              if (entry.header.typeKey === '0') {
+                if (nodeFiles.has(entry.path)) fail(`node-tar read ${entry.path} twice`)
+                const chunks = []
+                nodeFiles.set(entry.path, chunks)
+                entry.on('data', (chunk) => chunks.push(chunk))
               } else {
                 entry.resume()
               }
@@ -287,17 +313,37 @@ jobs:
             const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i])
             if (!same(nodePaths, gnuPaths)) fail('node-tar and GNU tar list different entries')
             if (!same(rawPaths, gnuPaths)) fail('raw headers and GNU tar list different entries')
+            if (!same(nodeSizes, rawSizes)) fail('node-tar and the raw headers read different entry sizes')
+            // Every file node-tar reads must be byte-identical to GNU tar's extraction, and the file sets equal.
+            const gnuFiles = []
+            const walk = (dir) => {
+              for (const dirent of fs.readdirSync(path.join(gnuExtract, dir), { withFileTypes: true })) {
+                const relative = dir ? `${dir}/${dirent.name}` : dirent.name
+                if (dirent.isDirectory()) walk(relative)
+                else if (dirent.isFile()) gnuFiles.push(relative)
+                else fail(`GNU tar extracted ${relative}, which is not a regular file`)
+              }
+            }
+            walk('')
+            if (!same([...nodeFiles.keys()].sort(), gnuFiles.sort())) fail('node-tar and GNU tar extract different files')
+            for (const [file, chunks] of nodeFiles) {
+              const gnuFile = path.join(gnuExtract, file)
+              if (!fs.existsSync(gnuFile) || !Buffer.concat(chunks).equals(fs.readFileSync(gnuFile))) {
+                fail(`node-tar's ${file} differs from GNU tar's`)
+              }
+            }
             for (const [file, committed] of [
               ['package/package.json', committedPackage],
               ['package/deployments/deployments.json', committedDeployments],
             ]) {
-              if (!Buffer.concat(wanted[file]).equals(fs.readFileSync(committed))) {
+              if (!nodeFiles.has(file) || !Buffer.concat(nodeFiles.get(file)).equals(fs.readFileSync(committed))) {
                 fail(`node-tar's ${file} differs from the committed file`)
               }
             }
             for (const problem of problems) console.log(`::error::${problem}`)
             if (problems.length > 0) process.exit(1)
             console.log(`node-tar, GNU tar and the raw headers agree on ${nodePaths.length} plain ustar entries`)
+            console.log(`all ${nodeFiles.size} files read by node-tar match GNU tar's extraction`)
           }
           parser.on('end', finish)
           // If node-tar stops on an error without ending, still report (and fail) instead of exiting 0.
@@ -308,7 +354,7 @@ jobs:
           parser.end(fs.readFileSync(archive))
           EOF
           node "$RUNNER_TEMP/check-tar.js" "$archive" "$(npm root -g)" "$RUNNER_TEMP/gnu-paths" \
-            "$COMMITTED_PACKAGE" "$COMMITTED_DEPLOYMENTS"
+            "$RUNNER_TEMP/gnu-extract" "$COMMITTED_PACKAGE" "$COMMITTED_DEPLOYMENTS"
 
   # Publishes the exact tarball built and checked above: no checkout, no install, no project scripts.
   publish:

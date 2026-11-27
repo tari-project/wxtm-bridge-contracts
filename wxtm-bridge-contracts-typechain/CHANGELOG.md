@@ -18,6 +18,7 @@ Built and published by `.github/workflows/npm-publish.yml` (renamed from `publis
 ### Changes
 
 - The publish workflow is now `.github/workflows/npm-publish.yml`. A read-only job builds and packs the tarball. A second job, which installs nothing, checks the packed name, version and `deployments.json` against the tag and the committed file. A third job publishes exactly that tarball. npm's trusted publisher names the new file, so the old `publish.yml` on earlier tags and commits can no longer publish.
+- `package.json` sets `"gypfile": false`, so npm never infers an `install` script (`node-gyp rebuild`) from a `binding.gyp` in the package.
 - `deployments.json` now holds exactly the records committed in `deployments/<network>/*.json`, plus `wTARIBridgeStartBlock`. The build checks this before packing.
 
 After publishing, the owner deprecates the earlier versions:
