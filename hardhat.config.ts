@@ -13,6 +13,7 @@ import { HardhatUserConfig, HttpNetworkAccountsUserConfig, NetworksUserConfig } 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
 import { listWtariConfigs } from './tasks/wtari'
+import './tasks/wxtm'
 
 /** @dev Uncomment below to use standard authentication method */
 // // Set your preferred authentication method
@@ -126,6 +127,20 @@ const config: HardhatUserConfig & { etherscan: { apiKey?: string } } = {
             mainnet: '0xe178b64Acf345A48a5a9FD34CA4F8d9cbA864fCB', // alias/admin-key, prod backend account
             // Testnets: the current DefaultProxyAdmin owners (deployments/<network>/DefaultProxyAdmin.json).
             'sepolia-testnet': '0x554498c7f1751942D7714aee6Fec976bf4BB72bB', // dev proposer key, alias/eth-signing-key
+            'base-sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+        },
+        // Guardian Safe holding PAUSER_ROLE on wXTMBridge and wXTMController (see utils/admin.ts). No default and
+        // no entries until the owner creates the Safe per chain: wXTMBridge/wXTMController deploys refuse to run.
+        guardian: {},
+        // wXTMController low and high minters (see utils/admin.ts getMinters). No default.
+        lowMinter: {
+            mainnet: '0x7cC835597EADFa3C5A5d9f0B90c0491C289B8Eee',
+            'sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+            'base-sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
+        },
+        highMinter: {
+            mainnet: '0xFa2459708A9549C371963a3fCd239dd614E8D52C',
+            'sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
             'base-sepolia-testnet': '0x226F0e896a78A1848e4Fa25ce901108F0d61c7f3',
         },
     },

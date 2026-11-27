@@ -24,21 +24,18 @@ import {
     fetchLogs,
     officialLzEndpoint,
     readWtariConfig,
-    safeFallbackHandlers,
-    safeSingletons,
     safeTxHashes,
     uncheckedImmutables,
     verifyWtariContracts,
     withRedactedRpcUrls,
     wtariPackageProblems,
 } from '../../tasks/wtari'
+import { safeFallbackHandlers, safeSingletons } from '../../utils/safe'
 import { WagmiAddress, getDeployments, getWtariChains } from '../../wxtm-bridge-contracts-typechain/deployments'
 
+import { SAFE_SINGLETON, makeSafeProxy } from './safeMock'
+
 const ROOT = path.join(__dirname, '..', '..')
-const SAFE_SINGLETON = '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762'
-// Runtime code of an official v1.4.1 SafeProxy (from SafeProxyFactory 0x4e1DCf7A...proxyCreationCode on Ethereum).
-const SAFE_PROXY_V141_RUNTIME =
-    '0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033'
 const OOTLE_ADDRESS =
     'otl_esm_1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7v9kn6'
 
@@ -52,88 +49,20 @@ async function expectRejection(promise: Promise<unknown>, message: string) {
     expect(error?.message).to.include(message)
 }
 
-// The only intentional differences from the renamed wXTM sources: the controller's daily low-tier budget (D14)
-// and the bridge's target address check (D17). Each [from, to] pair must match exactly once.
-const INTENTIONAL_DIFFS: { [clone: string]: [string, string][] } = {
-    'wTARIController.sol': [
-        [
-            '    error UnauthorizedToMintThisAmount();\n',
-            '    error UnauthorizedToMintThisAmount();\n    error LowMintDailyLimitExceeded();\n\n    event LowMintDailyLimitSet(uint256 limit);\n',
-        ],
-        [
-            '    IwTARI private wtari;\n',
-            '    IwTARI private wtari;\n\n' +
-                '    // Low-tier mints share one budget per fixed 24h window (block.timestamp / 1 days), not a rolling one:\n' +
-                '    // up to 2x the limit can be minted across a window boundary.\n' +
-                '    uint256 public lowMintDailyLimit;\n    uint256 public lowMintWindow;\n    uint256 public lowMintedInWindow;\n',
-        ],
-        [
-            '    function initialize(address _wtari, address lowMinter, address highMinter, address admin) external initializer {\n',
-            '    function initialize(\n        address _wtari,\n        address lowMinter,\n        address highMinter,\n' +
-                '        address admin,\n        uint256 _lowMintDailyLimit\n    ) external initializer {\n',
-        ],
-        [
-            '        wtari = IwTARI(_wtari);\n    }\n',
-            '        wtari = IwTARI(_wtari);\n\n        lowMintDailyLimit = _lowMintDailyLimit;\n' +
-                '        emit LowMintDailyLimitSet(_lowMintDailyLimit);\n    }\n\n' +
-                '    function setLowMintDailyLimit(uint256 limit) external onlyRole(DEFAULT_ADMIN_ROLE) {\n' +
-                '        lowMintDailyLimit = limit;\n        emit LowMintDailyLimitSet(limit);\n    }\n',
-        ],
-        [
-            '        if (amount > HIGH_MINT_THRESHOLD) revert UnauthorizedToMintThisAmount();\n',
-            '        if (amount > HIGH_MINT_THRESHOLD) revert UnauthorizedToMintThisAmount();\n\n' +
-                '        uint256 window = block.timestamp / 1 days;\n        if (window != lowMintWindow) {\n' +
-                '            lowMintWindow = window;\n            lowMintedInWindow = 0;\n        }\n' +
-                '        if (lowMintedInWindow + amount > lowMintDailyLimit) revert LowMintDailyLimitExceeded();\n' +
-                '        lowMintedInWindow += amount;\n',
-        ],
-    ],
-    'wTARIBridge.sol': [
-        [
-            '    error InsufficientAmount();\n',
-            '    error InsufficientAmount();\n    error InvalidTargetTariAddress();\n\n' +
-                '    uint256 private constant MAX_TARGET_TARI_ADDRESS_LENGTH = 128;\n',
-        ],
-        [
-            '    function bridgeToTari(string memory targetTariAddress, uint256 value) external {\n' +
-                '        if (value < 1000 ether) revert InsufficientAmount();\n',
-            '    function bridgeToTari(string memory targetTariAddress, uint256 value) external {\n' +
-                '        if (value < 1000 ether) revert InsufficientAmount();\n        _checkTargetTariAddress(targetTariAddress);\n',
-        ],
-        [
-            '        bytes32 s\n    ) external {\n        if (value < 1000 ether) revert InsufficientAmount();\n',
-            '        bytes32 s\n    ) external {\n        if (value < 1000 ether) revert InsufficientAmount();\n' +
-                '        _checkTargetTariAddress(targetTariAddress);\n',
-        ],
-        [
-            '        nonce++;\n    }\n}\n',
-            '        nonce++;\n    }\n\n' +
-                '    function _checkTargetTariAddress(string memory targetTariAddress) private pure {\n' +
-                '        uint256 length = bytes(targetTariAddress).length;\n' +
-                '        if (length == 0 || length > MAX_TARGET_TARI_ADDRESS_LENGTH) revert InvalidTargetTariAddress();\n' +
-                '    }\n}\n',
-        ],
-    ],
-}
-
 describe('wTARI clones', function () {
+    // wTARIController and wTARIBridge are no longer clones: the wXTM ones have pause and a base58 Tari address
+    // check that the wTARI ones do not (wTARI targets Ootle addresses); wTARITest.t.sol covers them.
     const pairs = [
         ['wXTM.sol', 'wTARI.sol'],
-        ['wXTMController.sol', 'wTARIController.sol'],
-        ['wXTMBridge.sol', 'wTARIBridge.sol'],
         ['interfaces/IwXTM.sol', 'interfaces/IwTARI.sol'],
     ]
 
     for (const [source, clone] of pairs) {
-        it(`${clone} differs from ${source} by names and the listed intentional changes only`, function () {
-            let expected = fs
+        it(`${clone} differs from ${source} by names only`, function () {
+            const expected = fs
                 .readFileSync(path.join(ROOT, 'contracts', source), 'utf8')
                 .replace(/wXTM/g, 'wTARI')
                 .replace(/wxtm/g, 'wtari')
-            for (const [from, to] of INTENTIONAL_DIFFS[clone] ?? []) {
-                expect(expected.split(from).length, `exactly one match for: ${from}`).to.equal(2)
-                expected = expected.replace(from, to)
-            }
             expect(fs.readFileSync(path.join(ROOT, 'contracts', clone), 'utf8')).to.equal(expected)
         })
     }
@@ -347,19 +276,8 @@ describe('deploy:wtari dry run', function () {
     const setStorage = (address: string, slot: string | number, value: string | number) =>
         ethers.provider.send('hardhat_setStorageAt', [address, toQuantity(slot), toWord(value)])
 
-    // A real v1.4.1 SafeProxy whose singleton (SafeMock code at the official singleton address) uses
-    // SafeMock's storage layout: slot 0 singleton, 1 owners, 2 threshold, 3 modules.
-    async function makeSafe(owners: string[], threshold: number, singleton = SAFE_SINGLETON) {
-        const address = ethers.Wallet.createRandom().address
-        await ethers.provider.send('hardhat_setCode', [address, SAFE_PROXY_V141_RUNTIME])
-        await setStorage(address, 0, singleton)
-        await setStorage(address, 1, owners.length)
-        const ownersStart = ethers.BigNumber.from(ethers.utils.keccak256(toWord(1)))
-        for (let i = 0; i < owners.length; i++) {
-            await setStorage(address, ownersStart.add(i).toHexString(), owners[i])
-        }
-        await setStorage(address, 2, threshold)
-        return new Contract(address, safeAbi, safeOwner)
+    async function makeSafe(owners: string[], threshold: number, singleton?: string) {
+        return new Contract(await makeSafeProxy(owners, threshold, singleton), safeAbi, safeOwner)
     }
 
     async function contracts() {

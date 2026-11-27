@@ -50,6 +50,7 @@ contract wXTMTest is TestHelperOz5 {
     address private userA = makeAddr("userA");
     address private userB = makeAddr("userB");
     address private admin = makeAddr("admin");
+    address private guardian = makeAddr("guardian");
     address private lowMinter = makeAddr("lowMinter");
     address private highMinter = makeAddr("highMinter");
 
@@ -60,6 +61,7 @@ contract wXTMTest is TestHelperOz5 {
         vm.deal(userA, INITIAL_BALANCE);
         vm.deal(userB, INITIAL_BALANCE);
         vm.deal(admin, INITIAL_BALANCE);
+        vm.etch(guardian, hex"00"); // stands in for the guardian Safe: the controller requires code there
         vm.deal(lowMinter, INITIAL_BALANCE);
         vm.deal(highMinter, INITIAL_BALANCE);
 
@@ -87,7 +89,14 @@ contract wXTMTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTMController).creationCode,
                 abi.encode(),
-                abi.encodeWithSelector(wXTMController.initialize.selector, address(aOFT), lowMinter, highMinter, admin)
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(aOFT),
+                    lowMinter,
+                    highMinter,
+                    admin,
+                    guardian
+                )
             )
         );
 
@@ -96,7 +105,14 @@ contract wXTMTest is TestHelperOz5 {
             _deployContractAndProxy(
                 type(wXTMController).creationCode,
                 abi.encode(),
-                abi.encodeWithSelector(wXTMController.initialize.selector, address(bOFT), lowMinter, highMinter, admin)
+                abi.encodeWithSelector(
+                    wXTMController.initialize.selector,
+                    address(bOFT),
+                    lowMinter,
+                    highMinter,
+                    admin,
+                    guardian
+                )
             )
         );
 

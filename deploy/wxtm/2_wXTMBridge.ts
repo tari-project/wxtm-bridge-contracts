@@ -1,11 +1,9 @@
 import assert from 'assert'
 
-import { ethers } from 'hardhat'
 import { type DeployFunction } from 'hardhat-deploy/types'
 
-import { assertDeployerCanUpgrade, getAdmin } from '../../utils/admin'
+import { assertUpgraded, chainDeployments, getAdmin, getGuardian, implementationOptions } from '../../utils/admin'
 import verify from '../../utils/verify'
-import { getDeployments } from '../../wxtm-bridge-contracts-typechain/deployments'
 
 const contractName = 'wXTMBridge'
 
@@ -19,27 +17,32 @@ const deploy: DeployFunction = async (hre) => {
 
     const { deploy } = deployments
     const { deployer } = await getNamedAccounts()
-    const deployedContracts = getDeployments(1)
 
     assert(deployer, 'Missing named deployer account')
     const admin = await getAdmin(hre)
+    // Existing proxies are only checked: upgrades go through upgrade-calldata:wxtm, and deploy() would also deploy a
+    // stray ProxyAdmin for the current admin (its CREATE2 address need not match the proxy's real ProxyAdmin).
+    const existing = await deployments.getOrNull(contractName)
+    const { guardian } = await getGuardian(hre, { deploying: !existing })
+    if (existing) {
+        await assertUpgraded(hre, contractName, existing, admin, guardian)
+        console.log(`${contractName} ${existing.address} runs ${existing.implementation} and is set up; nothing to do`)
+        return
+    }
+    const deployedContracts = await chainDeployments(hre, contractName)
 
     console.log(`wXTM: ${deployedContracts.wXTM}`)
     console.log(`Network: ${hre.network.name}`)
     console.log(`Deployer: ${deployer}`)
     console.log(`Admin: ${admin}`)
+    console.log(`Guardian: ${guardian}`)
 
-    const salt = ethers.utils.id('wXTMBridge-v0.0.1')
-    await assertDeployerCanUpgrade(hre, contractName, deployer, admin, {
-        contract: contractName,
-        args: [],
-        deterministicDeployment: salt,
-    })
+    const implementation = implementationOptions(contractName)
 
     const proxy = await deploy(contractName, {
         from: deployer,
-        args: [],
-        deterministicDeployment: salt,
+        args: implementation.args,
+        deterministicDeployment: implementation.deterministicDeployment,
         log: true,
         waitConfirmations: 5,
         skipIfAlreadyDeployed: false,
@@ -49,15 +52,12 @@ const deploy: DeployFunction = async (hre) => {
             execute: {
                 init: {
                     methodName: 'initialize',
-                    args: [deployedContracts.wXTM],
+                    args: [deployedContracts.wXTM, admin, guardian],
                 },
-                // onUpgrade: {
-                //     methodName: 'initialize',
-                //     args: [deployedContracts.wXTM],
-                // },
             },
         },
     })
+    await assertUpgraded(hre, contractName, proxy, admin, guardian)
 
     console.log(
         `wXTMBridge contract deployed to network: ${hre.network.name}, address: ${proxy.address}, wXTM: ${deployedContracts.wXTM}, implementation: ${proxy.implementation}`
