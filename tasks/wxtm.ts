@@ -47,6 +47,15 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
     const name = args.contract as Name
     const admin = await getAdmin(hre)
     const guardian = await getGuardian(hre)
+    const records = [name, `${name}_Implementation`, `${name}_Proxy`]
+    const missing = []
+    for (const record of records) if (!(await hre.deployments.getOrNull(record))) missing.push(record)
+    if (missing.length > 0) {
+        throw new Error(
+            `Missing ${missing.map((record) => `deployments/${hre.network.name}/${record}.json`).join(', ')}: ` +
+                `import the records of the deployed proxy first.`
+        )
+    }
     const proxy = await hre.deployments.get(name)
     const proxyAdmin = await slotAddress(hre, proxy.address, EIP1967_ADMIN_SLOT)
     const owner: string = await new ethers.Contract(
@@ -67,7 +76,9 @@ export async function upgradeCalldataAction(args: Args, hre: HardhatRuntimeEnvir
         const slot = await hre.ethers.provider.getStorageAt(proxy.address, INITIALIZABLE_SLOT)
         if (BigInt(slot) % 2n ** 64n >= SETUP_VERSION[name]) {
             await assertUpgraded(hre, name, { address: proxy.address, implementation: running }, admin, guardian)
-            throw new Error(`${name} ${proxy.address} already runs ${running} and is set up`)
+            throw new Error(
+                `${name} ${proxy.address} already runs ${running} and is set up (--check updates the records)`
+            )
         }
     }
     // Always the CREATE2 implementation deploy/wxtm would use, so the records match what the scripts compute.

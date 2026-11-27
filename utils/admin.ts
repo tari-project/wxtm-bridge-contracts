@@ -91,7 +91,8 @@ export async function assertUpgraded(
     if (failed.length === 0) return
     throw new Error(
         `${name} ${deployment.address} on "${hre.network.name}" is not upgraded and set up: ${failed.join('; ')}. ` +
-            `Upgrade with \`npx hardhat --network ${hre.network.name} upgrade-calldata:wxtm --contract ${name} --deploy-implementation\`.`
+            `Upgrade with \`npx hardhat --network ${hre.network.name} upgrade-calldata:wxtm --contract ${name} --deploy-implementation\`; ` +
+            `if the proxy is already upgraded and set up, run it with --check to update the records.`
     )
 }
 
@@ -108,7 +109,8 @@ export async function assertNotListedElsewhere(
     if (listed[name] && !(await hre.deployments.getOrNull(name))) {
         throw new Error(
             `${name} for chain ${chainId} is listed at ${listed[name]} in wxtm-bridge-contracts-typechain/deployments/` +
-                `deployments.json, but deployments/${hre.network.name}/${name}.json does not exist. Import that record, ` +
+                `deployments.json, but deployments/${hre.network.name}/${name}.json does not exist. Import its records ` +
+                `(${name}.json, ${name}_Implementation.json, ${name}_Proxy.json), ` +
                 `or remove the listing to deploy a new ${name} and repoint its consumers.`
         )
     }

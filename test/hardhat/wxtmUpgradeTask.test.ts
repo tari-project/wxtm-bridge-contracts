@@ -74,6 +74,21 @@ describe('upgrade-calldata:wxtm', function () {
         const send = async (tx?: { to: string; data: string }) =>
             (await admin.sendTransaction({ to: tx?.to, data: tx?.data })).wait()
 
+        it('refuses before deploying when a record of the proxy is missing', async function () {
+            await deployments.deploy('wXTMBridge', {
+                contract: 'wTARIBridge',
+                from,
+                proxy: { proxyContract: 'OpenZeppelinTransparentProxy', owner: admin.address },
+            })
+            await deployments.delete('wXTMBridge_Implementation')
+            await deployments.delete('wXTMBridge_Proxy')
+            const nonce = await hre.ethers.provider.getTransactionCount(from)
+            expect(await refusal(run('wXTMBridge', { deployImplementation: true }))).to.match(
+                /Missing deployments\/hardhat\/wXTMBridge_Implementation.json, deployments\/hardhat\/wXTMBridge_Proxy.json/
+            )
+            expect(await hre.ethers.provider.getTransactionCount(from)).to.equal(nonce)
+        })
+
         it('wXTMBridge: refusals, upgradeAndCall, --check records it, a set-up proxy is refused', async function () {
             // wTARIBridge stands in for the old implementation.
             await deployments.deploy('wXTMBridge', {

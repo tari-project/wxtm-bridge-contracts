@@ -86,12 +86,14 @@ describe('admin from named config', function () {
 
         it('refuses a fresh deploy over a contract the package lists for the chain', async function () {
             const error = await failure(hreWith('84532', {}), 'wXTMBridge')
-            expect(error?.message).to.match(/wXTMBridge for chain 84532 is listed at 0x5261.*Import that record/)
+            expect(error?.message).to.match(
+                /wXTMBridge for chain 84532 is listed at 0x5261.*Import its records \(wXTMBridge.json, wXTMBridge_Implementation.json, wXTMBridge_Proxy.json\)/
+            )
         })
 
         it('refuses a fresh wXTM deploy on a chain the package lists it for', async function () {
             const error = await refusalOf(assertNotListedElsewhere(hreWith('11155111', {}), 'wXTM'))
-            expect(error?.message).to.match(/wXTM for chain 11155111 is listed at 0xcBe7.*Import that record/)
+            expect(error?.message).to.match(/wXTM for chain 11155111 is listed at 0xcBe7.*Import its records/)
             expect(await refusalOf(assertNotListedElsewhere(hreWith('31337', {}), 'wXTM'))).to.be.undefined
         })
 
