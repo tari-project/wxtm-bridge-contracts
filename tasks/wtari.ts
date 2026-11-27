@@ -1395,6 +1395,8 @@ export async function wtariPackageProblems(
 ) {
     const problems: string[] = []
     for (const [chainId, entry] of Object.entries(exported)) {
+        // Malformed entries (null, arrays, scalars) are reported by packageDeploymentProblems.
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
         const keys = Object.keys(entry).filter((key) => key.startsWith('wTARI'))
         if (keys.length === 0) continue
         if (!hasWtariConfig(Number(chainId))) {
